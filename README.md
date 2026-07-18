@@ -3,6 +3,17 @@
 A personal, from-scratch training ground for the *machinery* behind controllable
 generative models, taught through proteins.
 
+## Run in Colab
+
+Colab ships with numpy/matplotlib/torch preinstalled, so the notebooks just run.
+
+- 0.1 Proteins as tensors — [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Michael-Nath/genbio-reps/blob/main/00_foundations/01_proteins_as_tensors.ipynb)
+
+While the repo is **private**, the first click needs a one-time grant: in Colab,
+`File -> Open notebook -> GitHub`, tick *Include private repos*, and authorize.
+To save edits back, use `File -> Save a copy in GitHub` (GitHub stays the source
+of truth). If you make the repo public, every link above works with no auth.
+
 ## Philosophy
 
 Most people "learn" generative bio by running someone's repo. It works, and they
