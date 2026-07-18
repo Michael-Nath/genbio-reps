@@ -136,6 +136,10 @@ async def _silent_exec(code):
         if msg["parent_header"].get("msg_id") != msg_id:
             continue
         if msg["msg_type"] == "status" and msg["content"]["execution_state"] == "idle":
+            try:
+                await kc.get_shell_msg(timeout=5)   # drain the shell reply
+            except Exception:
+                pass
             return
 
 
@@ -190,6 +194,24 @@ async def run_cell(cell_id):
             if out is not None:
                 cell["outputs"].append(out)
                 await broadcast({"type": "output", "cellId": cell_id, "output": out})
+        # Drain the shell reply and surface `obj?` / `obj??` help, which IPython
+        # returns as a "page" payload on the shell channel (not via iopub).
+        for _ in range(10):
+            try:
+                reply = await kc.get_shell_msg(timeout=5)
+            except Exception:
+                break
+            if reply["parent_header"].get("msg_id") != msg_id:
+                continue
+            for p in reply["content"].get("payload", []):
+                if p.get("source") == "page":
+                    text = p.get("data", {}).get("text/plain", "")
+                    if text:
+                        o = {"output_type": "stream", "name": "stdout",
+                             "text": ANSI.sub("", text)}
+                        cell["outputs"].append(o)
+                        await broadcast({"type": "output", "cellId": cell_id, "output": o})
+            break
         cell["running"] = False
         await broadcast({"type": "run_done", "cellId": cell_id,
                          "execution_count": cell["execution_count"]})

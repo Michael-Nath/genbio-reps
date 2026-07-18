@@ -8,6 +8,7 @@ generative models, taught through proteins.
 Colab ships with numpy/matplotlib/torch preinstalled, so the notebooks just run.
 
 - 0.1 Proteins as tensors — [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Michael-Nath/genbio-reps/blob/main/00_foundations/01_proteins_as_tensors.ipynb)
+- 0.2 The oracle mindset — [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Michael-Nath/genbio-reps/blob/main/00_foundations/02_the_oracle_mindset.ipynb)
 
 While the repo is **private**, the first click needs a one-time grant: in Colab,
 `File -> Open notebook -> GitHub`, tick *Include private repos*, and authorize.

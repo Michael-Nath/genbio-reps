@@ -8,8 +8,9 @@ Legend: [x] done · [ ] planned
 ## Track 0 — Foundations
 - [x] 0.1 Proteins as tensors — sequence/structure as arrays, distance & contact
       maps, per-residue SE(3) frames (foreshadows structure diffusion).
-- [ ] 0.2 The oracle mindset — what "controllable generation" means formally:
-      a generator `p(x)`, a property oracle `f(x)`, and the goal `p(x | f(x)=y)`.
+- [x] 0.2 The oracle mindset — what "controllable generation" means formally:
+      generator `p(x)`, oracle `f(x)`, target `p(x | f(x)=y)`. Rejection vs reward
+      tilting `p(x)exp(r/T)`, the reward-vs-diversity frontier, multi-objective design.
 
 ## Track 1 — Generative cores (the engines you will later steer)
 - [ ] 1.1 Autoregressive sequence model from scratch — a tiny transformer over

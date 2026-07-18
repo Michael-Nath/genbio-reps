@@ -44,6 +44,9 @@ Run a different notebook / port:
   someone else is in is tagged with their name/color.
 - **Shared execution** — outputs stream to everyone: text, matplotlib images,
   and tracebacks, all from one shared kernel.
+- **Inline docs (`?` / `??`)** — end a line with `obj?` for the signature +
+  docstring, or `obj??` for the source (e.g. `np.array?`, `tilted_resample??`).
+  Works just like Jupyter (rendered from IPython's help "page" payload).
 - **Run all / Interrupt** and **Save to .ipynb** (writes cells + outputs back to
   the real notebook, so your progress is committable).
 - **Presence** — who's connected, and where their cursor is.
