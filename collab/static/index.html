@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>reps — live notebook</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+  :root { --bg:#0f1216; --panel:#171b21; --panel2:#1d2229; --line:#2a313a;
+          --text:#e6e9ee; --muted:#8b95a3; --accent:#4c9aff; --run:#2ea043; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+  header { position:sticky; top:0; z-index:10; display:flex; align-items:center;
+           gap:14px; padding:10px 16px; background:var(--panel);
+           border-bottom:1px solid var(--line); }
+  header .title { font-weight:600; }
+  header .nb { color:var(--muted); font-size:12px; }
+  header .spacer { flex:1; }
+  .users { display:flex; gap:6px; align-items:center; }
+  .chip { display:flex; align-items:center; gap:5px; padding:3px 9px;
+          border-radius:999px; background:var(--panel2); font-size:12px; }
+  .dot { width:9px; height:9px; border-radius:50%; }
+  button { font:inherit; color:var(--text); background:var(--panel2);
+           border:1px solid var(--line); border-radius:6px; padding:5px 10px;
+           cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  button.run { background:var(--run); border-color:transparent; color:white; }
+  button.primary { background:var(--accent); border-color:transparent; color:white; }
+  #cells { max-width:1000px; margin:22px auto 160px; padding:0 16px; }
+  .cell { position:relative; margin:10px 0; border:1px solid var(--line);
+          border-radius:8px; background:var(--panel); overflow:hidden; }
+  .cell.active { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
+  .cell .gutter { position:absolute; left:-54px; top:6px; width:48px;
+                  text-align:right; color:var(--muted); font-size:11px;
+                  font-family:ui-monospace,Menlo,monospace; }
+  .cell.running .gutter { color:var(--accent); }
+  .toolbar { display:flex; align-items:center; gap:6px; padding:6px 8px;
+             background:var(--panel2); border-bottom:1px solid var(--line); }
+  .toolbar .kind { font-size:11px; color:var(--muted); text-transform:uppercase;
+                   letter-spacing:.06em; margin-right:auto; }
+  .presence-tags { display:flex; gap:4px; margin-left:6px; }
+  .ptag { font-size:10px; padding:1px 6px; border-radius:999px; color:#000; }
+  textarea { width:100%; border:0; outline:0; resize:none; padding:12px 14px;
+             background:transparent; color:var(--text); tab-size:4;
+             font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace; }
+  .md { padding:6px 16px; }
+  .md h1 { font-size:22px; } .md h2 { font-size:18px; } .md h3 { font-size:15px; }
+  .md code { background:var(--panel2); padding:1px 5px; border-radius:4px;
+             font-family:ui-monospace,Menlo,monospace; font-size:12px; }
+  .md pre { background:var(--panel2); padding:10px; border-radius:6px; overflow:auto; }
+  .md table { border-collapse:collapse; } .md th,.md td { border:1px solid var(--line); padding:4px 8px; }
+  .outputs { border-top:1px solid var(--line); padding:8px 14px;
+             font-family:ui-monospace,Menlo,monospace; font-size:12.5px; }
+  .outputs:empty { display:none; }
+  .outputs pre { margin:4px 0; white-space:pre-wrap; word-break:break-word; }
+  .outputs img { max-width:100%; background:white; border-radius:4px; margin:4px 0; }
+  .err { color:#ff7b72; }
+  .hint { color:var(--muted); font-size:11px; }
+  #bar { position:fixed; bottom:0; left:0; right:0; display:flex; gap:8px;
+         justify-content:center; padding:10px; background:var(--panel);
+         border-top:1px solid var(--line); }
+  .modal { position:fixed; inset:0; background:rgba(0,0,0,.6); display:flex;
+           align-items:center; justify-content:center; z-index:50; }
+  .modal .box { background:var(--panel); padding:24px; border-radius:10px;
+                border:1px solid var(--line); width:320px; }
+  .modal input { width:100%; padding:9px; margin:12px 0; border-radius:6px;
+                 border:1px solid var(--line); background:var(--panel2); color:var(--text); }
+</style>
+</head>
+<body>
+<header>
+  <span class="title">reps</span>
+  <span class="nb" id="nbname">—</span>
+  <span id="status" class="hint">connecting…</span>
+  <span class="spacer"></span>
+  <div class="users" id="users"></div>
+</header>
+
+<div id="cells"></div>
+
+<div id="bar">
+  <button class="primary" onclick="send({type:'run_all'})">▶ Run all</button>
+  <button onclick="send({type:'interrupt'})">■ Interrupt</button>
+  <button onclick="send({type:'save'})">💾 Save to .ipynb</button>
+</div>
+
+<div class="modal" id="modal">
+  <div class="box">
+    <div style="font-weight:600">Join the live session</div>
+    <div class="hint">Your name shows up for your partner.</div>
+    <input id="nameInput" placeholder="your name" autofocus>
+    <button class="primary" style="width:100%" onclick="join()">Join</button>
+  </div>
+</div>
+
+<script>
+let ws, me = {}, cells = [], users = [], activeCell = null;
+const $ = (id) => document.getElementById(id);
+const params = new URLSearchParams(location.search);
+
+function join() {
+  me.name = ($("nameInput").value || "guest").trim();
+  localStorage.setItem("reps_name", me.name);
+  $("modal").style.display = "none";
+  connect();
+}
+$("nameInput").value = params.get("name") || localStorage.getItem("reps_name") || "";
+$("nameInput").addEventListener("keydown", e => { if (e.key === "Enter") join(); });
+
+function wsURL() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  return `${proto}://${location.host}/ws`;
+}
+
+function connect() {
+  ws = new WebSocket(wsURL());
+  ws.onopen = () => { $("status").textContent = "● live"; $("status").style.color = "#3fb950";
+                      send({type:"hello", name: me.name}); };
+  ws.onclose = () => { $("status").textContent = "● disconnected — retrying"; $("status").style.color = "#ff7b72";
+                       setTimeout(connect, 1000); };
+  ws.onmessage = (e) => handle(JSON.parse(e.data));
+}
+function send(m) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(m)); }
+
+function handle(m) {
+  switch (m.type) {
+    case "init":
+      me.id = m.clientId; me.color = m.color; cells = m.cells; users = m.users;
+      $("nbname").textContent = m.notebook; renderAll(); renderUsers(); break;
+    case "presence": users = m.users; renderUsers(); renderPresenceTags(); break;
+    case "edit": {
+      const c = cells.find(x => x.id === m.cellId); if (!c) break;
+      c.source = m.source;
+      const ta = document.querySelector(`#src-${m.cellId}`);
+      if (ta && document.activeElement !== ta) { ta.value = m.source; autosize(ta); }
+      const md = document.querySelector(`#md-${m.cellId}`);
+      if (md) md.innerHTML = renderMd(m.source);
+      break; }
+    case "run_start": { const c = cells.find(x=>x.id===m.cellId); if(c){c.running=true;c.outputs=[];} setRunning(m.cellId,true); clearOut(m.cellId); break; }
+    case "output": { const c = cells.find(x=>x.id===m.cellId); if(c)c.outputs.push(m.output); appendOut(m.cellId, m.output); break; }
+    case "run_done": { const c=cells.find(x=>x.id===m.cellId); if(c){c.running=false;c.execution_count=m.execution_count;} setRunning(m.cellId,false); setCount(m.cellId,m.execution_count); break; }
+    case "add": { const i = cells.findIndex(x=>x.id===m.afterId); cells.splice(i+1,0,m.cell); renderAll(); break; }
+    case "delete": { cells = cells.filter(x=>x.id!==m.cellId); renderAll(); break; }
+    case "saved": flash("saved to .ipynb ✓"); break;
+  }
+}
+
+function renderMd(src) { try { return marked.parse(src); } catch(e){ return "<pre>"+esc(src)+"</pre>"; } }
+function esc(s){ return s.replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+
+function renderAll() {
+  const root = $("cells"); root.innerHTML = "";
+  cells.forEach((c, i) => root.appendChild(renderCell(c, i)));
+  renderPresenceTags();
+}
+
+function renderCell(c, i) {
+  const el = document.createElement("div");
+  el.className = "cell" + (c.running ? " running" : "");
+  el.id = "cell-" + c.id;
+  const gutter = c.cell_type === "code"
+    ? `[${c.execution_count ?? " "}]` : "md";
+  el.innerHTML = `
+    <div class="gutter" id="gut-${c.id}">${gutter}</div>
+    <div class="toolbar">
+      <span class="kind">${c.cell_type}</span>
+      <span class="presence-tags" id="pt-${c.id}"></span>
+      ${c.cell_type === "code" ? `<button class="run" onclick="runCell('${c.id}')">▶ Run</button>` : `<button onclick="editMd('${c.id}')">✎ Edit</button>`}
+      <button onclick="addAfter('${c.id}')">＋</button>
+      <button onclick="delCell('${c.id}')">🗑</button>
+    </div>`;
+  if (c.cell_type === "code") {
+    el.appendChild(makeEditor(c));
+    const out = document.createElement("div");
+    out.className = "outputs"; out.id = "out-" + c.id;
+    (c.outputs||[]).forEach(o => out.appendChild(outNode(o)));
+    el.appendChild(out);
+  } else {
+    const md = document.createElement("div");
+    md.className = "md"; md.id = "md-" + c.id; md.innerHTML = renderMd(c.source);
+    md.ondblclick = () => editMd(c.id);
+    el.appendChild(md);
+  }
+  return el;
+}
+
+function makeEditor(c) {
+  const ta = document.createElement("textarea");
+  ta.id = "src-" + c.id; ta.value = c.source; ta.rows = Math.max(2, c.source.split("\n").length);
+  ta.spellcheck = false;
+  ta.addEventListener("focus", () => setActive(c.id));
+  ta.addEventListener("input", () => { autosize(ta); c.source = ta.value; sendEdit(c.id, ta.value); });
+  ta.addEventListener("keydown", (e) => {
+    if (e.key === "Tab") { e.preventDefault(); insertAtCursor(ta, "    "); c.source = ta.value; sendEdit(c.id, ta.value); }
+    if (e.key === "Enter" && (e.shiftKey || e.ctrlKey || e.metaKey)) { e.preventDefault(); runCell(c.id); }
+  });
+  setTimeout(() => autosize(ta), 0);
+  return ta;
+}
+function insertAtCursor(ta, s){ const a=ta.selectionStart,b=ta.selectionEnd; ta.value=ta.value.slice(0,a)+s+ta.value.slice(b); ta.selectionStart=ta.selectionEnd=a+s.length; autosize(ta); }
+function autosize(ta){ ta.style.height="auto"; ta.style.height=(ta.scrollHeight+2)+"px"; }
+
+let editTimer = {};
+function sendEdit(id, src) {
+  clearTimeout(editTimer[id]);
+  editTimer[id] = setTimeout(() => send({type:"edit", cellId:id, source:src}), 90);
+}
+function setActive(id) {
+  activeCell = id;
+  document.querySelectorAll(".cell").forEach(e => e.classList.remove("active"));
+  const el = $("cell-"+id); if (el) el.classList.add("active");
+  send({type:"presence", cell:id});
+}
+
+function runCell(id){ const c=cells.find(x=>x.id===id); if(c&&c.cell_type==="md")return; send({type:"run", cellId:id}); }
+function addAfter(id){ send({type:"add", afterId:id, cellType:"code"}); }
+function delCell(id){ if(confirm("Delete this cell?")) send({type:"delete", cellId:id}); }
+function editMd(id){
+  const c = cells.find(x=>x.id===id); if(!c) return;
+  const md = $("md-"+id); if(!md) return;
+  const ta = makeEditor(c); ta.classList.add("mdedit");
+  ta.addEventListener("blur", () => { md.innerHTML = renderMd(c.source); ta.replaceWith(md); });
+  md.replaceWith(ta); ta.focus();
+}
+
+function setRunning(id, on){ const el=$("cell-"+id); if(el) el.classList.toggle("running", on); if(on){const g=$("gut-"+id); if(g)g.textContent="[*]";} }
+function setCount(id, n){ const g=$("gut-"+id); if(g) g.textContent=`[${n ?? " "}]`; }
+function clearOut(id){ const o=$("out-"+id); if(o) o.innerHTML=""; }
+function appendOut(id, o){ const c=$("out-"+id); if(c) c.appendChild(outNode(o)); }
+
+function outNode(o){
+  const d = document.createElement("div");
+  if (o.output_type === "stream") { const p=document.createElement("pre"); p.textContent=o.text; d.appendChild(p); }
+  else if (o.output_type === "error") { const p=document.createElement("pre"); p.className="err"; p.textContent=(o.traceback||[]).join("\n")||`${o.ename}: ${o.evalue}`; d.appendChild(p); }
+  else if (o.data) {
+    if (o.data["image/png"]) { const img=new Image(); img.src="data:image/png;base64,"+o.data["image/png"]; d.appendChild(img); }
+    else if (o.data["text/html"]) { const h=document.createElement("div"); h.innerHTML=o.data["text/html"]; d.appendChild(h); }
+    else if (o.data["text/plain"]) { const p=document.createElement("pre"); p.textContent=o.data["text/plain"]; d.appendChild(p); }
+  }
+  return d;
+}
+
+function renderUsers(){
+  $("users").innerHTML = users.map(u =>
+    `<span class="chip"><span class="dot" style="background:${u.color}"></span>${esc(u.name)}${u.id===me.id?" (you)":""}</span>`
+  ).join("");
+}
+function renderPresenceTags(){
+  document.querySelectorAll(".presence-tags").forEach(e => e.innerHTML="");
+  users.forEach(u => { if(!u.cell || u.id===me.id) return;
+    const pt = $("pt-"+u.cell); if(pt) pt.innerHTML += `<span class="ptag" style="background:${u.color}">${esc(u.name)}</span>`;
+  });
+}
+function flash(txt){ const s=$("status"); const old=s.textContent; s.textContent=txt; setTimeout(()=>s.textContent="● live",1200); }
+
+// auto-join if name already known via URL
+if (params.get("name")) join();
+</script>
+</body>
+</html>

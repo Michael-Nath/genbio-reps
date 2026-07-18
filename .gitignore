@@ -8,5 +8,8 @@ env/
 # Jupyter
 .ipynb_checkpoints/
 
+# collab app: local tunnel binary
+collab/.bin/
+
 # OS
 .DS_Store

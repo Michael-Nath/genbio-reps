@@ -14,6 +14,18 @@ While the repo is **private**, the first click needs a one-time grant: in Colab,
 To save edits back, use `File -> Save a copy in GitHub` (GitHub stays the source
 of truth). If you make the repo public, every link above works with no auth.
 
+## Work through it live with a friend
+
+Pair on a notebook in real time — shared cells, edits, and outputs over a single
+kernel, low latency:
+
+```bash
+cd collab && ./share.sh
+```
+
+It prints a public URL; send it to your partner and you're both in the same live
+notebook. See [`collab/README.md`](collab/README.md).
+
 ## Philosophy
 
 Most people "learn" generative bio by running someone's repo. It works, and they
