@@ -197,25 +197,21 @@ function handle(m) {
 function renderMd(src) { try { return marked.parse(src||""); } catch(e){ return "<pre>"+esc(src)+"</pre>"; } }
 function esc(s){ return (s||"").replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
 
-function refreshEditors() {
-  // CodeMirror measures 0 height when created off-DOM; re-measure once attached.
-  requestAnimationFrame(() => Object.values(editors).forEach(cm => cm.refresh()));
-}
-
 function renderAll() {
   const root = $("cells"); root.innerHTML = "";
   for (const k in editors) delete editors[k];
-  cells.forEach(c => root.appendChild(buildCell(c)));
+  cells.forEach(c => root.appendChild(buildCell(c)));   // attach first
+  cells.forEach(c => initEditor(c));                    // then build editors in-DOM
   renderPresenceTags();
   if (selected) markSelection();
-  refreshEditors();
 }
 
 function rebuildCell(c) {
   const old = $("cell-"+c.id); if(!old) return;
   delete editors[c.id];
-  const fresh = buildCell(c); old.replaceWith(fresh); renderPresenceTags();
-  requestAnimationFrame(() => { const cm = editors[c.id]; if (cm) cm.refresh(); });
+  const fresh = buildCell(c); old.replaceWith(fresh);   // attach first
+  initEditor(c);                                        // then build editor in-DOM
+  renderPresenceTags();
 }
 
 function buildCell(c) {
@@ -248,17 +244,27 @@ function buildCell(c) {
   const out = document.createElement("div"); out.className="outputs"; out.id="out-"+c.id;
   if (c.cell_type === "code") { (c.outputs||[]).forEach(o=>out.appendChild(outNode(o))); el.appendChild(out); }
 
-  // CodeMirror editor
+  // NOTE: the CodeMirror editor is created later by initEditor(), AFTER this
+  // element is attached to the DOM — otherwise CM mis-measures its height and
+  // gutter width (blank cells / left edge clipped).
+  return el;
+}
+
+function initEditor(c) {
+  if (editors[c.id]) return;
+  const host = document.querySelector("#cell-" + c.id + " .editor-host");
+  if (!host) return;
+  const isCode = c.cell_type === "code";
   const cm = CodeMirror(host, {
     value: c.source,
-    mode: c.cell_type==="code" ? "python" : "markdown",
+    mode: isCode ? "python" : "markdown",
     theme: "material-darker",
-    lineNumbers: c.cell_type==="code",
+    lineNumbers: isCode,
     indentUnit: 4, tabSize: 4, indentWithTabs: false,
     matchBrackets: true, autoCloseBrackets: true, styleActiveLine: true,
     viewportMargin: Infinity,
-    gutters: c.cell_type==="code" ? ["CodeMirror-lint-markers"] : [],
-    lint: c.cell_type==="code" ? { getAnnotations: pyLinter, async: true, delay: 400 } : false,
+    gutters: isCode ? ["CodeMirror-lint-markers"] : [],
+    lint: isCode ? { getAnnotations: pyLinter, async: true, delay: 400 } : false,
     extraKeys: cmKeys(c.id),
   });
   cm._cellId = c.id;
@@ -269,10 +275,9 @@ function buildCell(c) {
   });
   cm.on("focus", () => { selectCell(cm._cellId, false); setMode("edit"); });
   editors[c.id] = cm;
-
   // markdown starts in rendered view (editor hidden) unless empty
-  if (c.cell_type === "markdown" && (c.source||"").trim()) host.style.display = "none";
-  return el;
+  if (!isCode && (c.source||"").trim()) host.style.display = "none";
+  cm.refresh();
 }
 
 function outNode(o){
