@@ -28,10 +28,22 @@ Run a different notebook / port:
 
 ## What you get
 
+- **Real editor** — CodeMirror with Python syntax highlighting, line numbers,
+  bracket matching/closing, and 4-space auto-indent.
+- **Live Python linting** — `pyflakes` runs on the backend as you type
+  (undefined names, unused imports, syntax errors) with squiggles + gutter marks.
+  Cross-cell names are understood, so `np` defined in an earlier cell isn't
+  flagged in a later one.
+- **Jupyter keyboard model** — command mode (blue) vs edit mode (green):
+  - `Esc` command · `Enter` edit
+  - `A`/`B` insert above/below · `D` `D` delete · `M`/`Y` markdown/code
+  - `J`/`K` (or arrows) move selection · `C`/`X`/`V` copy/cut/paste cell
+  - `Shift-Enter` run + next · `Ctrl/Cmd-Enter` run · `Alt-Enter` run + insert
+  - `Cmd//Ctrl-/` toggle comment · `Tab`/`Shift-Tab` indent
 - **Live cell editing** — typing syncs to your partner (~90ms debounce); the cell
   someone else is in is tagged with their name/color.
-- **Shared execution** — anyone hits Run (or Shift/Cmd-Enter); outputs stream to
-  everyone: text, matplotlib images, and tracebacks.
+- **Shared execution** — outputs stream to everyone: text, matplotlib images,
+  and tracebacks, all from one shared kernel.
 - **Run all / Interrupt** and **Save to .ipynb** (writes cells + outputs back to
   the file, so your progress is committable).
 - **Presence** — who's connected, and where their cursor is.

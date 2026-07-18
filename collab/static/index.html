@@ -5,9 +5,22 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>reps — live notebook</title>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<!-- CodeMirror 5 (zero-build, via CDN) -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/material-darker.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/lint/lint.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/python/python.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/markdown/markdown.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/matchbrackets.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/closebrackets.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/comment/comment.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/selection/active-line.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/lint/lint.min.js"></script>
 <style>
   :root { --bg:#0f1216; --panel:#171b21; --panel2:#1d2229; --line:#2a313a;
-          --text:#e6e9ee; --muted:#8b95a3; --accent:#4c9aff; --run:#2ea043; }
+          --text:#e6e9ee; --muted:#8b95a3; --accent:#4c9aff; --run:#2ea043;
+          --edit:#2ea043; --cmd:#4c9aff; }
   * { box-sizing: border-box; }
   body { margin:0; background:var(--bg); color:var(--text);
          font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
@@ -17,6 +30,8 @@
   header .title { font-weight:600; }
   header .nb { color:var(--muted); font-size:12px; }
   header .spacer { flex:1; }
+  .khint { color:var(--muted); font-size:11px; }
+  .khint b { color:var(--text); font-weight:600; }
   .users { display:flex; gap:6px; align-items:center; }
   .chip { display:flex; align-items:center; gap:5px; padding:3px 9px;
           border-radius:999px; background:var(--panel2); font-size:12px; }
@@ -27,23 +42,28 @@
   button:hover { border-color:var(--accent); }
   button.run { background:var(--run); border-color:transparent; color:white; }
   button.primary { background:var(--accent); border-color:transparent; color:white; }
-  #cells { max-width:1000px; margin:22px auto 160px; padding:0 16px; }
-  .cell { position:relative; margin:10px 0; border:1px solid var(--line);
-          border-radius:8px; background:var(--panel); overflow:hidden; }
-  .cell.active { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
-  .cell .gutter { position:absolute; left:-54px; top:6px; width:48px;
-                  text-align:right; color:var(--muted); font-size:11px;
+  #cells { max-width:1040px; margin:22px auto 150px; padding:0 16px; }
+  .cell { position:relative; margin:10px 0 10px 46px; border:1px solid var(--line);
+          border-radius:8px; background:var(--panel); }
+  .cell.sel-cmd  { border-color:var(--cmd);  box-shadow:0 0 0 1px var(--cmd); }
+  .cell.sel-edit { border-color:var(--edit); box-shadow:0 0 0 1px var(--edit); }
+  .cell .gutter { position:absolute; left:-46px; top:0; bottom:0; width:40px;
+                  display:flex; align-items:flex-start; justify-content:flex-end;
+                  padding-top:8px; color:var(--muted); font-size:11px;
                   font-family:ui-monospace,Menlo,monospace; }
   .cell.running .gutter { color:var(--accent); }
-  .toolbar { display:flex; align-items:center; gap:6px; padding:6px 8px;
-             background:var(--panel2); border-bottom:1px solid var(--line); }
+  .toolbar { display:flex; align-items:center; gap:6px; padding:5px 8px;
+             border-bottom:1px solid var(--line); border-radius:8px 8px 0 0;
+             background:var(--panel2); }
   .toolbar .kind { font-size:11px; color:var(--muted); text-transform:uppercase;
                    letter-spacing:.06em; margin-right:auto; }
   .presence-tags { display:flex; gap:4px; margin-left:6px; }
   .ptag { font-size:10px; padding:1px 6px; border-radius:999px; color:#000; }
-  textarea { width:100%; border:0; outline:0; resize:none; padding:12px 14px;
-             background:transparent; color:var(--text); tab-size:4;
-             font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace; }
+  .editor-host { }
+  .CodeMirror { height:auto; background:transparent; font-size:13px;
+                font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+                border-radius:0 0 8px 8px; }
+  .CodeMirror-gutters { background:var(--panel); border:0; }
   .md { padding:6px 16px; }
   .md h1 { font-size:22px; } .md h2 { font-size:18px; } .md h3 { font-size:15px; }
   .md code { background:var(--panel2); padding:1px 5px; border-radius:4px;
@@ -52,28 +72,31 @@
   .md table { border-collapse:collapse; } .md th,.md td { border:1px solid var(--line); padding:4px 8px; }
   .outputs { border-top:1px solid var(--line); padding:8px 14px;
              font-family:ui-monospace,Menlo,monospace; font-size:12.5px; }
-  .outputs:empty { display:none; }
+  .outputs:empty { display:none; padding:0; border:0; }
   .outputs pre { margin:4px 0; white-space:pre-wrap; word-break:break-word; }
   .outputs img { max-width:100%; background:white; border-radius:4px; margin:4px 0; }
   .err { color:#ff7b72; }
-  .hint { color:var(--muted); font-size:11px; }
   #bar { position:fixed; bottom:0; left:0; right:0; display:flex; gap:8px;
          justify-content:center; padding:10px; background:var(--panel);
          border-top:1px solid var(--line); }
   .modal { position:fixed; inset:0; background:rgba(0,0,0,.6); display:flex;
            align-items:center; justify-content:center; z-index:50; }
   .modal .box { background:var(--panel); padding:24px; border-radius:10px;
-                border:1px solid var(--line); width:320px; }
+                border:1px solid var(--line); width:340px; }
   .modal input { width:100%; padding:9px; margin:12px 0; border-radius:6px;
                  border:1px solid var(--line); background:var(--panel2); color:var(--text); }
+  .modal .keys { font-size:12px; color:var(--muted); line-height:1.8; }
+  kbd { background:var(--panel2); border:1px solid var(--line); border-radius:4px;
+        padding:0 5px; font-size:11px; font-family:ui-monospace,Menlo,monospace; }
 </style>
 </head>
 <body>
 <header>
   <span class="title">reps</span>
   <span class="nb" id="nbname">—</span>
-  <span id="status" class="hint">connecting…</span>
+  <span id="status" class="khint">connecting…</span>
   <span class="spacer"></span>
+  <span class="khint"><b>Esc</b> cmd · <b>Enter</b> edit · <b>A/B</b> add · <b>DD</b> del · <b>M/Y</b> md/code · <b>⇧⏎</b> run</span>
   <div class="users" id="users"></div>
 </header>
 
@@ -88,16 +111,29 @@
 <div class="modal" id="modal">
   <div class="box">
     <div style="font-weight:600">Join the live session</div>
-    <div class="hint">Your name shows up for your partner.</div>
     <input id="nameInput" placeholder="your name" autofocus>
     <button class="primary" style="width:100%" onclick="join()">Join</button>
+    <div class="keys" style="margin-top:14px">
+      <b>Command mode</b> (blue): <kbd>A</kbd>/<kbd>B</kbd> add above/below ·
+      <kbd>D</kbd><kbd>D</kbd> delete · <kbd>M</kbd>/<kbd>Y</kbd> markdown/code ·
+      <kbd>J</kbd>/<kbd>K</kbd> move · <kbd>C</kbd>/<kbd>X</kbd>/<kbd>V</kbd> copy/cut/paste ·
+      <kbd>Enter</kbd> edit<br>
+      <b>Edit mode</b> (green): <kbd>Esc</kbd> command ·
+      <kbd>⇧⏎</kbd> run+next · <kbd>⌃⏎</kbd> run · <kbd>⌥⏎</kbd> run+insert ·
+      <kbd>⌘/</kbd> comment
+    </div>
   </div>
 </div>
 
 <script>
-let ws, me = {}, cells = [], users = [], activeCell = null;
+let ws, me = {}, cells = [], users = [];
+let selected = null, mode = "command";        // "command" | "edit"
+let clipboard = null, pendingSelectAfter = null, pendingPaste = null;
+let lastD = 0;
+const editors = {};                            // cellId -> CodeMirror instance
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
+const isMac = navigator.platform.toUpperCase().includes("MAC");
 
 function join() {
   me.name = ($("nameInput").value || "guest").trim();
@@ -108,126 +144,129 @@ function join() {
 $("nameInput").value = params.get("name") || localStorage.getItem("reps_name") || "";
 $("nameInput").addEventListener("keydown", e => { if (e.key === "Enter") join(); });
 
-function wsURL() {
-  const proto = location.protocol === "https:" ? "wss" : "ws";
-  return `${proto}://${location.host}/ws`;
-}
-
+/* ---------------------------- networking ------------------------------ */
+function wsURL() { return (location.protocol === "https:" ? "wss" : "ws") + "://" + location.host + "/ws"; }
 function connect() {
   ws = new WebSocket(wsURL());
-  ws.onopen = () => { $("status").textContent = "● live"; $("status").style.color = "#3fb950";
-                      send({type:"hello", name: me.name}); };
-  ws.onclose = () => { $("status").textContent = "● disconnected — retrying"; $("status").style.color = "#ff7b72";
-                       setTimeout(connect, 1000); };
+  ws.onopen = () => { setStatus("● live", "#3fb950"); send({type:"hello", name: me.name}); };
+  ws.onclose = () => { setStatus("● disconnected — retrying", "#ff7b72"); setTimeout(connect, 1000); };
   ws.onmessage = (e) => handle(JSON.parse(e.data));
 }
 function send(m) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(m)); }
+function setStatus(t, c) { const s=$("status"); s.textContent=t; s.style.color=c; }
 
 function handle(m) {
   switch (m.type) {
     case "init":
       me.id = m.clientId; me.color = m.color; cells = m.cells; users = m.users;
-      $("nbname").textContent = m.notebook; renderAll(); renderUsers(); break;
+      $("nbname").textContent = m.notebook; renderAll(); renderUsers();
+      if (cells[0]) selectCell(cells[0].id, false); break;
     case "presence": users = m.users; renderUsers(); renderPresenceTags(); break;
-    case "edit": {
-      const c = cells.find(x => x.id === m.cellId); if (!c) break;
-      c.source = m.source;
-      const ta = document.querySelector(`#src-${m.cellId}`);
-      if (ta && document.activeElement !== ta) { ta.value = m.source; autosize(ta); }
-      const md = document.querySelector(`#md-${m.cellId}`);
-      if (md) md.innerHTML = renderMd(m.source);
-      break; }
-    case "run_start": { const c = cells.find(x=>x.id===m.cellId); if(c){c.running=true;c.outputs=[];} setRunning(m.cellId,true); clearOut(m.cellId); break; }
-    case "output": { const c = cells.find(x=>x.id===m.cellId); if(c)c.outputs.push(m.output); appendOut(m.cellId, m.output); break; }
+    case "edit": applyRemoteEdit(m.cellId, m.source); break;
+    case "settype": {
+      const c = cells.find(x=>x.id===m.cellId); if(!c) break;
+      c.cell_type = m.cellType; c.outputs=[]; c.execution_count=null;
+      rebuildCell(c); if (selected===m.cellId) selectCell(m.cellId, false); break; }
+    case "run_start": { const c=cells.find(x=>x.id===m.cellId); if(c){c.running=true;c.outputs=[];} setRunning(m.cellId,true); clearOut(m.cellId); break; }
+    case "output": { const c=cells.find(x=>x.id===m.cellId); if(c)c.outputs.push(m.output); appendOut(m.cellId,m.output); break; }
     case "run_done": { const c=cells.find(x=>x.id===m.cellId); if(c){c.running=false;c.execution_count=m.execution_count;} setRunning(m.cellId,false); setCount(m.cellId,m.execution_count); break; }
-    case "add": { const i = cells.findIndex(x=>x.id===m.afterId); cells.splice(i+1,0,m.cell); renderAll(); break; }
-    case "delete": { cells = cells.filter(x=>x.id!==m.cellId); renderAll(); break; }
+    case "add": {
+      const i = cells.findIndex(x=>x.id===m.afterId);
+      cells.splice(i+1, 0, m.cell); renderAll();
+      if (m.afterId === pendingSelectAfter) {
+        pendingSelectAfter = null;
+        if (pendingPaste) { const p=pendingPaste; pendingPaste=null;
+          if (p.cell_type==="markdown") send({type:"settype",cellId:m.cell.id,cellType:"markdown"});
+          send({type:"edit", cellId:m.cell.id, source:p.source});
+          m.cell.source = p.source; m.cell.cell_type = p.cell_type;
+        }
+        selectCell(m.cell.id, false);
+      }
+      break; }
+    case "delete": {
+      const wasSel = selected===m.cellId;
+      const idx = cells.findIndex(x=>x.id===m.cellId);
+      cells = cells.filter(x=>x.id!==m.cellId); renderAll();
+      if (wasSel) { const n = cells[Math.min(idx, cells.length-1)]; if(n) selectCell(n.id, false); }
+      break; }
     case "saved": flash("saved to .ipynb ✓"); break;
   }
 }
 
-function renderMd(src) { try { return marked.parse(src); } catch(e){ return "<pre>"+esc(src)+"</pre>"; } }
-function esc(s){ return s.replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+/* ---------------------------- rendering ------------------------------- */
+function renderMd(src) { try { return marked.parse(src||""); } catch(e){ return "<pre>"+esc(src)+"</pre>"; } }
+function esc(s){ return (s||"").replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
 
 function renderAll() {
   const root = $("cells"); root.innerHTML = "";
-  cells.forEach((c, i) => root.appendChild(renderCell(c, i)));
+  for (const k in editors) delete editors[k];
+  cells.forEach(c => root.appendChild(buildCell(c)));
   renderPresenceTags();
+  if (selected) markSelection();
 }
 
-function renderCell(c, i) {
+function rebuildCell(c) {
+  const old = $("cell-"+c.id); if(!old) return;
+  delete editors[c.id];
+  const fresh = buildCell(c); old.replaceWith(fresh); renderPresenceTags();
+}
+
+function buildCell(c) {
   const el = document.createElement("div");
   el.className = "cell" + (c.running ? " running" : "");
   el.id = "cell-" + c.id;
-  const gutter = c.cell_type === "code"
-    ? `[${c.execution_count ?? " "}]` : "md";
-  el.innerHTML = `
-    <div class="gutter" id="gut-${c.id}">${gutter}</div>
-    <div class="toolbar">
-      <span class="kind">${c.cell_type}</span>
-      <span class="presence-tags" id="pt-${c.id}"></span>
-      ${c.cell_type === "code" ? `<button class="run" onclick="runCell('${c.id}')">▶ Run</button>` : `<button onclick="editMd('${c.id}')">✎ Edit</button>`}
-      <button onclick="addAfter('${c.id}')">＋</button>
-      <button onclick="delCell('${c.id}')">🗑</button>
-    </div>`;
-  if (c.cell_type === "code") {
-    el.appendChild(makeEditor(c));
-    const out = document.createElement("div");
-    out.className = "outputs"; out.id = "out-" + c.id;
-    (c.outputs||[]).forEach(o => out.appendChild(outNode(o)));
-    el.appendChild(out);
-  } else {
-    const md = document.createElement("div");
-    md.className = "md"; md.id = "md-" + c.id; md.innerHTML = renderMd(c.source);
-    md.ondblclick = () => editMd(c.id);
-    el.appendChild(md);
-  }
+  el.onmousedown = (e) => { if (!e.target.closest(".CodeMirror")) selectCell(c.id, false); };
+
+  const gutter = document.createElement("div");
+  gutter.className = "gutter"; gutter.id = "gut-"+c.id;
+  gutter.textContent = c.cell_type === "code" ? `[${c.execution_count ?? " "}]` : "";
+  el.appendChild(gutter);
+
+  const tb = document.createElement("div");
+  tb.className = "toolbar";
+  tb.innerHTML = `<span class="kind">${c.cell_type}</span><span class="presence-tags" id="pt-${c.id}"></span>`;
+  const runBtn = document.createElement("button");
+  runBtn.textContent = c.cell_type==="code" ? "▶ Run" : "▶ Render";
+  runBtn.className = c.cell_type==="code" ? "run" : "";
+  runBtn.onclick = () => runAndAdvance(c.id);
+  const addBtn = document.createElement("button"); addBtn.textContent="＋"; addBtn.title="add below (B)"; addBtn.onclick=()=>addCell(c.id,"below");
+  const delBtn = document.createElement("button"); delBtn.textContent="🗑"; delBtn.title="delete (DD)"; delBtn.onclick=()=>{ if(confirm("Delete this cell?")) send({type:"delete",cellId:c.id}); };
+  tb.append(runBtn, addBtn, delBtn);
+  el.appendChild(tb);
+
+  const host = document.createElement("div"); host.className="editor-host"; el.appendChild(host);
+  const rendered = document.createElement("div"); rendered.className="md"; rendered.id="md-"+c.id;
+  if (c.cell_type === "markdown") { rendered.innerHTML = renderMd(c.source); el.appendChild(rendered); }
+
+  const out = document.createElement("div"); out.className="outputs"; out.id="out-"+c.id;
+  if (c.cell_type === "code") { (c.outputs||[]).forEach(o=>out.appendChild(outNode(o))); el.appendChild(out); }
+
+  // CodeMirror editor
+  const cm = CodeMirror(host, {
+    value: c.source,
+    mode: c.cell_type==="code" ? "python" : "markdown",
+    theme: "material-darker",
+    lineNumbers: c.cell_type==="code",
+    indentUnit: 4, tabSize: 4, indentWithTabs: false,
+    matchBrackets: true, autoCloseBrackets: true, styleActiveLine: true,
+    viewportMargin: Infinity,
+    gutters: c.cell_type==="code" ? ["CodeMirror-lint-markers"] : [],
+    lint: c.cell_type==="code" ? { getAnnotations: pyLinter, async: true, delay: 400 } : false,
+    extraKeys: cmKeys(c.id),
+  });
+  cm._cellId = c.id;
+  cm.on("change", (inst, chg) => {
+    if (chg.origin === "setValue" || inst._remote) return;
+    const cc = cells.find(x=>x.id===inst._cellId); if(cc) cc.source = inst.getValue();
+    sendEdit(inst._cellId, inst.getValue());
+  });
+  cm.on("focus", () => { selectCell(cm._cellId, false); setMode("edit"); });
+  editors[c.id] = cm;
+
+  // markdown starts in rendered view (editor hidden) unless empty
+  if (c.cell_type === "markdown" && (c.source||"").trim()) host.style.display = "none";
   return el;
 }
-
-function makeEditor(c) {
-  const ta = document.createElement("textarea");
-  ta.id = "src-" + c.id; ta.value = c.source; ta.rows = Math.max(2, c.source.split("\n").length);
-  ta.spellcheck = false;
-  ta.addEventListener("focus", () => setActive(c.id));
-  ta.addEventListener("input", () => { autosize(ta); c.source = ta.value; sendEdit(c.id, ta.value); });
-  ta.addEventListener("keydown", (e) => {
-    if (e.key === "Tab") { e.preventDefault(); insertAtCursor(ta, "    "); c.source = ta.value; sendEdit(c.id, ta.value); }
-    if (e.key === "Enter" && (e.shiftKey || e.ctrlKey || e.metaKey)) { e.preventDefault(); runCell(c.id); }
-  });
-  setTimeout(() => autosize(ta), 0);
-  return ta;
-}
-function insertAtCursor(ta, s){ const a=ta.selectionStart,b=ta.selectionEnd; ta.value=ta.value.slice(0,a)+s+ta.value.slice(b); ta.selectionStart=ta.selectionEnd=a+s.length; autosize(ta); }
-function autosize(ta){ ta.style.height="auto"; ta.style.height=(ta.scrollHeight+2)+"px"; }
-
-let editTimer = {};
-function sendEdit(id, src) {
-  clearTimeout(editTimer[id]);
-  editTimer[id] = setTimeout(() => send({type:"edit", cellId:id, source:src}), 90);
-}
-function setActive(id) {
-  activeCell = id;
-  document.querySelectorAll(".cell").forEach(e => e.classList.remove("active"));
-  const el = $("cell-"+id); if (el) el.classList.add("active");
-  send({type:"presence", cell:id});
-}
-
-function runCell(id){ const c=cells.find(x=>x.id===id); if(c&&c.cell_type==="md")return; send({type:"run", cellId:id}); }
-function addAfter(id){ send({type:"add", afterId:id, cellType:"code"}); }
-function delCell(id){ if(confirm("Delete this cell?")) send({type:"delete", cellId:id}); }
-function editMd(id){
-  const c = cells.find(x=>x.id===id); if(!c) return;
-  const md = $("md-"+id); if(!md) return;
-  const ta = makeEditor(c); ta.classList.add("mdedit");
-  ta.addEventListener("blur", () => { md.innerHTML = renderMd(c.source); ta.replaceWith(md); });
-  md.replaceWith(ta); ta.focus();
-}
-
-function setRunning(id, on){ const el=$("cell-"+id); if(el) el.classList.toggle("running", on); if(on){const g=$("gut-"+id); if(g)g.textContent="[*]";} }
-function setCount(id, n){ const g=$("gut-"+id); if(g) g.textContent=`[${n ?? " "}]`; }
-function clearOut(id){ const o=$("out-"+id); if(o) o.innerHTML=""; }
-function appendOut(id, o){ const c=$("out-"+id); if(c) c.appendChild(outNode(o)); }
 
 function outNode(o){
   const d = document.createElement("div");
@@ -241,20 +280,142 @@ function outNode(o){
   return d;
 }
 
+/* ------------------------- linting (pyflakes) ------------------------- */
+function pyLinter(text, updateLinting, options, cm) {
+  const codeCells = cells.filter(c => c.cell_type === "code");
+  const idx = codeCells.findIndex(c => c.id === cm._cellId);
+  if (idx < 0) { updateLinting([]); return; }
+  const sources = codeCells.map(c => editors[c.id] ? editors[c.id].getValue() : c.source);
+  fetch("/lint", { method:"POST", headers:{"Content-Type":"application/json"},
+                   body: JSON.stringify({ sources, index: idx }) })
+    .then(r => r.json())
+    .then(diags => updateLinting((diags||[]).map(d => ({
+      message: d.message, severity: d.severity,
+      from: CodeMirror.Pos(d.line, d.col), to: CodeMirror.Pos(d.line, d.col + 1),
+    })))).catch(() => updateLinting([]));
+}
+
+/* --------------------------- editing sync ----------------------------- */
+let editTimer = {};
+function sendEdit(id, src){ clearTimeout(editTimer[id]); editTimer[id]=setTimeout(()=>send({type:"edit",cellId:id,source:src}),90); }
+function applyRemoteEdit(id, src){
+  const c = cells.find(x=>x.id===id); if(c) c.source=src;
+  const cm = editors[id];
+  if (cm && !cm.hasFocus()) { cm._remote=true; const cur=cm.getCursor(); cm.setValue(src); cm.setCursor(cur); cm._remote=false; }
+  const md = $("md-"+id); if (md) md.innerHTML = renderMd(src);
+}
+
+/* --------------------------- modes & keys ----------------------------- */
+function cmKeys(id) {
+  const runNext = cm => runAndAdvance(cm._cellId);
+  const run = cm => { send({type:"run",cellId:cm._cellId}); };
+  const runInsert = cm => { send({type:"run",cellId:cm._cellId}); addCell(cm._cellId,"below"); };
+  const k = {
+    "Shift-Enter": runNext, "Ctrl-Enter": run, "Cmd-Enter": run,
+    "Alt-Enter": runInsert, "Esc": () => setMode("command"),
+    "Tab": cm => cm.somethingSelected() ? cm.execCommand("indentMore") : cm.replaceSelection("    "),
+    "Shift-Tab": cm => cm.execCommand("indentLess"),
+    "Ctrl-/": cm => cm.toggleComment(), "Cmd-/": cm => cm.toggleComment(),
+  };
+  return k;
+}
+
+function setMode(m) {
+  mode = m;
+  if (m === "command") { const cm = selected && editors[selected]; if (cm && cm.hasFocus()) cm.getInputField().blur(); document.body.focus(); }
+  markSelection();
+}
+function selectCell(id, edit) {
+  selected = id; markSelection(); send({type:"presence", cell:id});
+  if (edit) enterEdit(id);
+}
+function markSelection() {
+  document.querySelectorAll(".cell").forEach(e => e.classList.remove("sel-cmd","sel-edit"));
+  const el = selected && $("cell-"+selected); if (!el) return;
+  el.classList.add(mode === "edit" ? "sel-edit" : "sel-cmd");
+}
+function enterEdit(id) {
+  const c = cells.find(x=>x.id===id); if(!c) return;
+  setMode("edit");
+  const cm = editors[id]; if(!cm) return;
+  if (c.cell_type === "markdown") { const host = cm.getWrapperElement().parentElement; host.style.display=""; const md=$("md-"+id); if(md) md.style.display="none"; }
+  cm.refresh(); cm.focus();
+}
+function leaveEditToRendered(id) {
+  const c = cells.find(x=>x.id===id); if(!c || c.cell_type!=="markdown") return;
+  const cm = editors[id]; const host = cm.getWrapperElement().parentElement;
+  const md = $("md-"+id); if(md){ md.innerHTML=renderMd(c.source); md.style.display=""; }
+  if ((c.source||"").trim()) host.style.display="none";
+}
+
+function moveSel(delta) {
+  const i = cells.findIndex(x=>x.id===selected);
+  const j = Math.max(0, Math.min(cells.length-1, i+delta));
+  if (cells[j]) { selectCell(cells[j].id, false); $("cell-"+cells[j].id).scrollIntoView({block:"nearest"}); }
+}
+function runAndAdvance(id) {
+  const c = cells.find(x=>x.id===id);
+  if (c && c.cell_type === "markdown") { leaveEditToRendered(id); }
+  else { send({type:"run", cellId:id}); }
+  setMode("command");
+  const i = cells.findIndex(x=>x.id===id);
+  if (i < cells.length-1) selectCell(cells[i+1].id, false);
+}
+function addCell(refId, where) {
+  const i = cells.findIndex(x=>x.id===refId);
+  const afterId = where==="above" ? (i>0 ? cells[i-1].id : "") : refId;
+  pendingSelectAfter = afterId;
+  send({type:"add", afterId, cellType:"code"});
+}
+function setType(id, t) { send({type:"settype", cellId:id, cellType:t}); }
+
+/* command-mode keyboard */
+document.addEventListener("keydown", (e) => {
+  if ($("modal").style.display !== "none") return;
+  if (mode === "edit") return;                      // CodeMirror owns keys
+  if (!selected) return;
+  const k = e.key;
+  // run shortcuts work in command mode too
+  if (k === "Enter" && e.shiftKey) { e.preventDefault(); runAndAdvance(selected); return; }
+  if (k === "Enter" && (e.ctrlKey||e.metaKey)) { e.preventDefault(); send({type:"run",cellId:selected}); return; }
+  if (k === "Enter" && e.altKey) { e.preventDefault(); send({type:"run",cellId:selected}); addCell(selected,"below"); return; }
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  switch (k) {
+    case "Enter": e.preventDefault(); enterEdit(selected); break;
+    case "a": e.preventDefault(); addCell(selected,"above"); break;
+    case "b": e.preventDefault(); addCell(selected,"below"); break;
+    case "m": e.preventDefault(); setType(selected,"markdown"); break;
+    case "y": e.preventDefault(); setType(selected,"code"); break;
+    case "j": case "ArrowDown": e.preventDefault(); moveSel(1); break;
+    case "k": case "ArrowUp": e.preventDefault(); moveSel(-1); break;
+    case "c": e.preventDefault(); { const cc=cells.find(x=>x.id===selected); if(cc) clipboard={cell_type:cc.cell_type, source:cc.source}; } break;
+    case "x": e.preventDefault(); { const cc=cells.find(x=>x.id===selected); if(cc){ clipboard={cell_type:cc.cell_type, source:cc.source}; send({type:"delete",cellId:selected}); } } break;
+    case "v": e.preventDefault(); if (clipboard){ pendingPaste={...clipboard}; addCell(selected,"below"); } break;
+    case "d":
+      if (Date.now() - lastD < 500) { lastD = 0; send({type:"delete", cellId:selected}); }
+      else lastD = Date.now();
+      break;
+  }
+});
+
+/* ---------------------------- run state ------------------------------- */
+function setRunning(id,on){ const el=$("cell-"+id); if(el) el.classList.toggle("running",on); if(on){const g=$("gut-"+id); if(g)g.textContent="[*]";} }
+function setCount(id,n){ const g=$("gut-"+id); if(g) g.textContent=`[${n ?? " "}]`; }
+function clearOut(id){ const o=$("out-"+id); if(o) o.innerHTML=""; }
+function appendOut(id,o){ const c=$("out-"+id); if(c) c.appendChild(outNode(o)); }
+
+/* ---------------------------- presence -------------------------------- */
 function renderUsers(){
   $("users").innerHTML = users.map(u =>
-    `<span class="chip"><span class="dot" style="background:${u.color}"></span>${esc(u.name)}${u.id===me.id?" (you)":""}</span>`
-  ).join("");
+    `<span class="chip"><span class="dot" style="background:${u.color}"></span>${esc(u.name)}${u.id===me.id?" (you)":""}</span>`).join("");
 }
 function renderPresenceTags(){
   document.querySelectorAll(".presence-tags").forEach(e => e.innerHTML="");
   users.forEach(u => { if(!u.cell || u.id===me.id) return;
-    const pt = $("pt-"+u.cell); if(pt) pt.innerHTML += `<span class="ptag" style="background:${u.color}">${esc(u.name)}</span>`;
-  });
+    const pt=$("pt-"+u.cell); if(pt) pt.innerHTML += `<span class="ptag" style="background:${u.color}">${esc(u.name)}</span>`; });
 }
-function flash(txt){ const s=$("status"); const old=s.textContent; s.textContent=txt; setTimeout(()=>s.textContent="● live",1200); }
+function flash(t){ const s=$("status"); s.textContent=t; setTimeout(()=>s.textContent="● live",1200); }
 
-// auto-join if name already known via URL
 if (params.get("name")) join();
 </script>
 </body>

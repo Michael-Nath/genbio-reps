@@ -8,6 +8,7 @@ kernel so outputs (text, matplotlib images, tracebacks) are genuine.
 Run:  ./run.sh   (or)   NB_PATH=../00_foundations/01_proteins_as_tensors.ipynb \
                         .venv/bin/uvicorn server:app --host 0.0.0.0 --port 8000
 """
+import ast
 import asyncio
 import json
 import os
@@ -16,10 +17,15 @@ import uuid
 from pathlib import Path
 
 import nbformat
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from jupyter_client.manager import AsyncKernelManager
+
+try:
+    from pyflakes.checker import Checker as _PyflakesChecker
+except Exception:
+    _PyflakesChecker = None
 
 ROOT = Path(__file__).resolve().parent
 NB_PATH = Path(
@@ -203,9 +209,54 @@ def save_notebook():
 
 
 # --------------------------------------------------------------------------- #
+# Linting (pyflakes). Lint the target cell for its own syntax errors, and use
+# the concatenation of ALL code cells for name/usage warnings, so names defined
+# in other cells don't produce false "undefined name" / "unused import" noise.
+# --------------------------------------------------------------------------- #
+def lint_cell(sources, idx):
+    if idx < 0 or idx >= len(sources):
+        return []
+    target = sources[idx]
+    try:
+        ast.parse(target)
+    except SyntaxError as e:
+        return [{"line": (e.lineno or 1) - 1,
+                 "col": max((e.offset or 1) - 1, 0),
+                 "message": f"SyntaxError: {e.msg}", "severity": "error"}]
+    if _PyflakesChecker is None:
+        return []
+    combined, offsets, ln = "", [], 1
+    for s in sources:
+        offsets.append(ln)
+        combined += s + "\n"
+        ln += s.count("\n") + 1
+    start = offsets[idx]
+    end = start + target.count("\n")
+    out = []
+    try:
+        tree = ast.parse(combined)
+        checker = _PyflakesChecker(tree, filename="cells")
+        for m in checker.messages:
+            if start <= m.lineno <= end:
+                out.append({"line": m.lineno - start,
+                            "col": getattr(m, "col", 0),
+                            "message": m.message % m.message_args,
+                            "severity": "warning"})
+    except SyntaxError:
+        pass
+    return out
+
+
+# --------------------------------------------------------------------------- #
 # App
 # --------------------------------------------------------------------------- #
 app = FastAPI()
+
+
+@app.post("/lint")
+async def lint(request: Request):
+    data = await request.json()
+    return lint_cell(data.get("sources", []), int(data.get("index", 0)))
 
 
 @app.on_event("startup")
@@ -261,6 +312,14 @@ async def ws(websocket: WebSocket):
                 state.cells.insert(idx + 1, new)
                 await broadcast({"type": "add", "cell": new,
                                  "afterId": msg.get("afterId")})
+            elif t == "settype":
+                c = state.by_id(msg["cellId"])
+                if c is not None:
+                    c["cell_type"] = msg["cellType"]
+                    c["outputs"] = []
+                    c["execution_count"] = None
+                await broadcast({"type": "settype", "cellId": msg["cellId"],
+                                 "cellType": msg["cellType"]})
             elif t == "delete":
                 state.cells = [c for c in state.cells if c["id"] != msg["cellId"]]
                 await broadcast({"type": "delete", "cellId": msg["cellId"]})

@@ -13,7 +13,7 @@ PORT="${2:-8000}"
 if [ ! -d .venv ]; then
   python3 -m venv .venv
   .venv/bin/pip install -q --upgrade pip
-  .venv/bin/pip install -q fastapi "uvicorn[standard]" jupyter_client ipykernel nbformat numpy matplotlib
+  .venv/bin/pip install -q fastapi "uvicorn[standard]" jupyter_client ipykernel nbformat numpy matplotlib pyflakes
 fi
 
 CF="./.bin/cloudflared"
