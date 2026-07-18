@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Start the live collaborative notebook server.
-# Usage: ./run.sh [notebook.ipynb] [port]
+# Every .ipynb in the repo is auto-discovered as its own session — open
+# http://localhost:$PORT to see the list, or jump straight to /n/<slug>.
+# Usage: ./run.sh [port]
 set -euo pipefail
 cd "$(dirname "$0")"
 
-NB="${1:-../00_foundations/01_proteins_as_tensors.ipynb}"
-PORT="${2:-8000}"
+PORT="${1:-8000}"
 
 if [ ! -d .venv ]; then
   python3 -m venv .venv
@@ -13,6 +14,5 @@ if [ ! -d .venv ]; then
   .venv/bin/pip install -q fastapi "uvicorn[standard]" jupyter_client ipykernel nbformat numpy matplotlib pyflakes
 fi
 
-export NB_PATH="$NB"
-echo "serving $NB on http://0.0.0.0:$PORT  (open http://localhost:$PORT)"
+echo "serving sessions on http://0.0.0.0:$PORT  (open http://localhost:$PORT)"
 exec .venv/bin/uvicorn server:app --host 0.0.0.0 --port "$PORT"

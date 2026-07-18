@@ -92,6 +92,7 @@
 </head>
 <body>
 <header>
+  <a href="/" class="khint" style="text-decoration:none">← sessions</a>
   <span class="title">reps</span>
   <span class="nb" id="nbname">—</span>
   <span id="status" class="khint">connecting…</span>
@@ -134,6 +135,7 @@ const editors = {};                            // cellId -> CodeMirror instance
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const isMac = navigator.platform.toUpperCase().includes("MAC");
+const slug = location.pathname.split("/").filter(Boolean).pop();
 
 function join() {
   me.name = ($("nameInput").value || "guest").trim();
@@ -145,7 +147,7 @@ $("nameInput").value = params.get("name") || localStorage.getItem("reps_name") |
 $("nameInput").addEventListener("keydown", e => { if (e.key === "Enter") join(); });
 
 /* ---------------------------- networking ------------------------------ */
-function wsURL() { return (location.protocol === "https:" ? "wss" : "ws") + "://" + location.host + "/ws"; }
+function wsURL() { return (location.protocol === "https:" ? "wss" : "ws") + "://" + location.host + "/ws/" + slug; }
 function connect() {
   ws = new WebSocket(wsURL());
   ws.onopen = () => { setStatus("● live", "#3fb950"); send({type:"hello", name: me.name}); };
@@ -306,7 +308,7 @@ function pyLinter(text, updateLinting, options, cm) {
   const idx = codeCells.findIndex(c => c.id === cm._cellId);
   if (idx < 0) { updateLinting([]); return; }
   const sources = codeCells.map(c => editors[c.id] ? editors[c.id].getValue() : c.source);
-  fetch("/lint", { method:"POST", headers:{"Content-Type":"application/json"},
+  fetch("/lint/" + slug, { method:"POST", headers:{"Content-Type":"application/json"},
                    body: JSON.stringify({ sources, index: idx }) })
     .then(r => r.json())
     .then(diags => updateLinting((diags||[]).map(d => ({

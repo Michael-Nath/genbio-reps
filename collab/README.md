@@ -13,11 +13,12 @@ cd collab
 ```
 
 It prints a `https://<random>.trycloudflare.com` URL. Send it to your friend.
-You both open it, type a name, and you're in the same notebook. Ctrl-C to stop.
+You both open it, pick a notebook from the session list, type a name, and
+you're in the same notebook. Ctrl-C to stop.
 
-Run a different notebook / port:
+Run on a different port:
 ```bash
-./share.sh ../00_foundations/01_proteins_as_tensors.ipynb 8000
+./share.sh 8000
 ```
 
 ## Local only (same machine / LAN, no tunnel)
@@ -25,6 +26,21 @@ Run a different notebook / port:
 ```bash
 ./run.sh                # http://localhost:8000
 ```
+
+## Sessions
+
+Every `.ipynb` under the repo is auto-discovered and served as its own
+session — own cells, own live kernel, own autosave sidecar. Open `/` to see
+all of them at a glance:
+
+- a live dot + connected-user count if people are in it right now
+- "kernel running · idle" if the kernel has started but nobody's connected
+- "saved" if there's autosaved work waiting, kernel not started yet
+- "not started" for a notebook nobody's opened yet
+
+Click **Open →** on any card (or go straight to `/n/<slug>`) to join that
+notebook's live session. Kernels start lazily — the first person to open a
+notebook spins up its kernel; it's shared by everyone who joins after.
 
 ## What you get
 
@@ -53,11 +69,12 @@ Run a different notebook / port:
 
 ## Persistence (survives restarts)
 
-Live state — every cell's source, type, and **outputs** — is autosaved
-(debounced ~1.2s, and after every run) to a gitignored sidecar at
-`collab/.state/<notebook>.autosave.ipynb`. On startup the server restores from
-that sidecar if it exists, so **restarting the server resumes exactly where you
-left off**. Browser reloads never lose state (the server holds it).
+Live state — every cell's source, type, and **outputs** — is autosaved per
+notebook (debounced ~1.2s, and after every run) to a gitignored sidecar at
+`collab/.state/<notebook>.autosave.ipynb`. On startup the server restores each
+session from its sidecar if one exists, so **restarting the server resumes
+exactly where you left off**, for every notebook. Browser reloads never lose
+state (the server holds it).
 
 - The **pristine notebook is only touched by the 💾 Save button** — autosave goes
   to the sidecar, so your teaching notebook stays clean until you choose to commit.
@@ -68,11 +85,18 @@ left off**. Browser reloads never lose state (the server holds it).
 
 ## How it works
 
-- `server.py` — FastAPI. Loads the `.ipynb`, holds shared cell state, runs code
-  against one `AsyncKernelManager` kernel, and broadcasts edits/outputs/presence
-  over `/ws`. `%matplotlib inline` is enabled at startup so figures render as PNGs.
-- `static/index.html` — zero-build vanilla JS. Renders cells, syncs edits, streams
-  outputs, renders markdown (marked.js).
+- `server.py` — FastAPI. Discovers every `.ipynb` in the repo as its own
+  `Session` (cells, kernel, clients, autosave). Each session runs code against
+  its own `AsyncKernelManager` kernel (started lazily on first connection) and
+  broadcasts edits/outputs/presence over `/ws/<slug>`. `%matplotlib inline` is
+  enabled per-kernel so figures render as PNGs. `GET /api/sessions` reports
+  live status for the session list.
+- `static/sessions.html` — the `/` landing page: lists every session with its
+  status (live / kernel idle / saved / not started), polling `/api/sessions`
+  every few seconds.
+- `static/notebook.html` — zero-build vanilla JS notebook UI, served at
+  `/n/<slug>`. Renders cells, syncs edits, streams outputs, renders markdown
+  (marked.js).
 - `share.sh` — server + `cloudflared` quick tunnel (binary auto-downloaded to
   `.bin/`, which is gitignored). `test_client.py` is the integration test.
 

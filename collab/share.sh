@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # Start the live server AND a public tunnel, so a friend can join from anywhere.
-# Usage: ./share.sh [notebook.ipynb] [port]
+# Every .ipynb in the repo is auto-discovered as its own session.
+# Usage: ./share.sh [port]
 #
 # Prints a https://<random>.trycloudflare.com URL — send it to your friend.
-# Both of you open the same URL, type a name, and you share one live notebook.
+# Both of you open the same URL, pick a session (or share a direct /n/<slug>
+# link), type a name, and you share one live notebook.
 set -euo pipefail
 cd "$(dirname "$0")"
 
-NB="${1:-../00_foundations/01_proteins_as_tensors.ipynb}"
-PORT="${2:-8000}"
+PORT="${1:-8000}"
 
 if [ ! -d .venv ]; then
   python3 -m venv .venv
@@ -27,14 +28,12 @@ if [ ! -x "$CF" ]; then
   fi
 fi
 
-export NB_PATH="$NB"
 .venv/bin/uvicorn server:app --host 127.0.0.1 --port "$PORT" > /tmp/reps_server.log 2>&1 &
 SPID=$!
 trap 'kill $SPID 2>/dev/null || true' EXIT
 sleep 3
 
 echo "local:  http://localhost:$PORT"
-echo "notebook: $NB"
 echo "----------------------------------------------------------------"
 echo "Public URL below — send it to your friend. Ctrl-C to stop."
 echo "----------------------------------------------------------------"

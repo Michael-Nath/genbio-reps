@@ -2,7 +2,8 @@
 import asyncio, json, sys
 import websockets
 
-URI = "ws://127.0.0.1:8010/ws"
+SLUG = "00_foundations--01_proteins_as_tensors"
+URI = f"ws://127.0.0.1:8010/ws/{SLUG}"
 
 
 async def recv_until(ws, pred, timeout=30):

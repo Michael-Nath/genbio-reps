@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>reps — sessions</title>
+<style>
+  :root { --bg:#0f1216; --panel:#171b21; --panel2:#1d2229; --line:#2a313a;
+          --text:#e6e9ee; --muted:#8b95a3; --accent:#4c9aff; --live:#3fb950;
+          --idle:#f5a623; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+  header { display:flex; align-items:baseline; gap:12px; padding:20px 24px;
+           border-bottom:1px solid var(--line); }
+  header .title { font-weight:600; font-size:18px; }
+  header .sub { color:var(--muted); font-size:13px; }
+  #list { max-width:780px; margin:24px auto 60px; padding:0 16px; }
+  .empty { color:var(--muted); text-align:center; margin-top:60px; }
+  .card { display:flex; align-items:center; gap:14px; padding:14px 16px;
+          border:1px solid var(--line); border-radius:10px; background:var(--panel);
+          margin-bottom:10px; }
+  .card .main { flex:1; min-width:0; }
+  .card .name { font-weight:600; }
+  .card .path { color:var(--muted); font-size:12px; font-family:ui-monospace,Menlo,monospace;
+                white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .meta { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .badge { display:flex; align-items:center; gap:6px; font-size:12px; padding:3px 10px;
+           border-radius:999px; background:var(--panel2); white-space:nowrap; }
+  .dot { width:8px; height:8px; border-radius:50%; flex:none; }
+  .dot.live { background:var(--live); box-shadow:0 0 6px var(--live); }
+  .dot.idle-run { background:var(--idle); }
+  .dot.saved { background:var(--muted); }
+  .dot.fresh { background:transparent; border:1px solid var(--muted); }
+  .stat { color:var(--muted); font-size:12px; white-space:nowrap; }
+  .users { display:flex; gap:4px; }
+  .uchip { width:9px; height:9px; border-radius:50%; border:1px solid var(--bg); }
+  a.open { text-decoration:none; color:var(--text); background:var(--panel2);
+           border:1px solid var(--line); border-radius:6px; padding:7px 14px;
+           font-size:13px; white-space:nowrap; }
+  a.open:hover { border-color:var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <span class="title">reps</span>
+  <span class="sub">live notebook sessions in this repo</span>
+</header>
+<div id="list"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+function timeAgo(epochSec) {
+  const diff = Date.now()/1000 - epochSec;
+  if (diff < 60) return "just now";
+  if (diff < 3600) return Math.floor(diff/60) + "m ago";
+  if (diff < 86400) return Math.floor(diff/3600) + "h ago";
+  return Math.floor(diff/86400) + "d ago";
+}
+
+function statusOf(s) {
+  if (s.client_count > 0) return { cls: "live", label: `● live · ${s.client_count} connected` };
+  if (s.kernel_running) return { cls: "idle-run", label: "kernel running · idle" };
+  if (s.has_autosave) return { cls: "saved", label: "saved" };
+  return { cls: "fresh", label: "not started" };
+}
+
+function render(sessions) {
+  const root = $("list");
+  if (!sessions.length) {
+    root.innerHTML = `<div class="empty">No notebooks found in this repo.</div>`;
+    return;
+  }
+  root.innerHTML = "";
+  for (const s of sessions) {
+    const st = statusOf(s);
+    const card = document.createElement("div");
+    card.className = "card";
+    card.innerHTML = `
+      <div class="main">
+        <div class="name">${esc(s.name)}</div>
+        <div class="path">${esc(s.path)}</div>
+      </div>
+      <div class="meta">
+        <span class="badge"><span class="dot ${st.cls}"></span>${st.label}</span>
+        <span class="stat">${s.cell_count} cells</span>
+        <span class="stat">${timeAgo(s.last_modified)}</span>
+        <span class="users">${s.users.map(u=>`<span class="uchip" style="background:${u.color}" title="${esc(u.name)}"></span>`).join("")}</span>
+      </div>
+      <a class="open" href="/n/${encodeURIComponent(s.slug)}">Open →</a>
+    `;
+    root.appendChild(card);
+  }
+}
+
+function esc(s){ return (s||"").replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+
+async function refresh() {
+  try {
+    const r = await fetch("/api/sessions");
+    render(await r.json());
+  } catch (e) { /* keep showing last good render */ }
+}
+
+refresh();
+setInterval(refresh, 4000);
+</script>
+</body>
+</html>
