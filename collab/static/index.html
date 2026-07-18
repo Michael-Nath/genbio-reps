@@ -197,18 +197,25 @@ function handle(m) {
 function renderMd(src) { try { return marked.parse(src||""); } catch(e){ return "<pre>"+esc(src)+"</pre>"; } }
 function esc(s){ return (s||"").replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
 
+function refreshEditors() {
+  // CodeMirror measures 0 height when created off-DOM; re-measure once attached.
+  requestAnimationFrame(() => Object.values(editors).forEach(cm => cm.refresh()));
+}
+
 function renderAll() {
   const root = $("cells"); root.innerHTML = "";
   for (const k in editors) delete editors[k];
   cells.forEach(c => root.appendChild(buildCell(c)));
   renderPresenceTags();
   if (selected) markSelection();
+  refreshEditors();
 }
 
 function rebuildCell(c) {
   const old = $("cell-"+c.id); if(!old) return;
   delete editors[c.id];
   const fresh = buildCell(c); old.replaceWith(fresh); renderPresenceTags();
+  requestAnimationFrame(() => { const cm = editors[c.id]; if (cm) cm.refresh(); });
 }
 
 function buildCell(c) {
