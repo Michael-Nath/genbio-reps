@@ -38,20 +38,44 @@ ANSI = re.compile(r"\x1b\[[0-9;]*m")
 COLORS = ["#e6194B", "#3cb44b", "#4363d8", "#f58231",
           "#911eb4", "#00b8a9", "#f032e6", "#bfa100"]
 
+# Autosave sidecar: full live state (incl. outputs) so a server restart resumes
+# where you left off. Gitignored; the pristine notebook is only touched by "Save".
+STATE_DIR = ROOT / ".state"
+STATE_PATH = STATE_DIR / (NB_PATH.stem + ".autosave.ipynb")
+
 
 # --------------------------------------------------------------------------- #
 # Shared notebook state
 # --------------------------------------------------------------------------- #
+def _outputs_from_nb(cell):
+    outs = []
+    for o in cell.get("outputs", []):
+        ot = o.get("output_type")
+        if ot == "stream":
+            outs.append({"output_type": "stream",
+                         "name": o.get("name", "stdout"), "text": o.get("text", "")})
+        elif ot in ("execute_result", "display_data"):
+            outs.append({"output_type": ot, "data": dict(o.get("data", {}))})
+        elif ot == "error":
+            outs.append({"output_type": "error", "ename": o.get("ename", ""),
+                         "evalue": o.get("evalue", ""),
+                         "traceback": list(o.get("traceback", []))})
+    return outs
+
+
 def load_cells():
-    nb = nbformat.read(NB_PATH, as_version=4)
+    # prefer the autosaved working state; fall back to the original notebook
+    path = STATE_PATH if STATE_PATH.exists() else NB_PATH
+    nb = nbformat.read(path, as_version=4)
     cells = []
     for c in nb.cells:
+        is_code = c.cell_type == "code"
         cells.append({
             "id": (c.get("id") or uuid.uuid4().hex[:8]),
             "cell_type": c.cell_type,
             "source": c.source,
-            "outputs": [],
-            "execution_count": None,
+            "outputs": _outputs_from_nb(c) if is_code else [],
+            "execution_count": c.get("execution_count") if is_code else None,
             "running": False,
         })
     return cells
@@ -169,6 +193,7 @@ async def run_cell(cell_id):
         cell["running"] = False
         await broadcast({"type": "run_done", "cellId": cell_id,
                          "execution_count": cell["execution_count"]})
+        schedule_autosave()
 
 
 async def run_all():
@@ -177,7 +202,7 @@ async def run_all():
             await run_cell(c["id"])
 
 
-def save_notebook():
+def write_nb(path):
     nb = nbformat.v4.new_notebook()
     nb.metadata = {"kernelspec": {"display_name": "Python 3",
                                   "language": "python", "name": "python3"},
@@ -205,7 +230,41 @@ def save_notebook():
             cell.outputs = outs
             out_cells.append(cell)
     nb.cells = out_cells
-    nbformat.write(nb, NB_PATH)
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    nbformat.write(nb, str(path))
+
+
+def save_notebook():
+    """Explicit save -> the real, tracked notebook (the 💾 button)."""
+    write_nb(NB_PATH)
+    autosave_now()
+
+
+def autosave_now():
+    """Persist live working state -> gitignored sidecar (survives restarts)."""
+    try:
+        write_nb(STATE_PATH)
+    except Exception as e:
+        print("autosave failed:", e)
+
+
+_save_task = None
+
+
+def schedule_autosave(delay=1.2):
+    """Debounced autosave; coalesces bursts of edits into one write."""
+    global _save_task
+    if _save_task and not _save_task.done():
+        _save_task.cancel()
+
+    async def _later():
+        try:
+            await asyncio.sleep(delay)
+            autosave_now()
+        except asyncio.CancelledError:
+            pass
+
+    _save_task = asyncio.create_task(_later())
 
 
 # --------------------------------------------------------------------------- #
@@ -293,6 +352,7 @@ async def ws(websocket: WebSocket):
                     c["source"] = msg["source"]
                 await broadcast({"type": "edit", "cellId": msg["cellId"],
                                  "source": msg["source"], "from": cid}, exclude=cid)
+                schedule_autosave()
             elif t == "run":
                 asyncio.create_task(run_cell(msg["cellId"]))
             elif t == "run_all":
@@ -305,13 +365,15 @@ async def ws(websocket: WebSocket):
             elif t == "add":
                 new = {"id": uuid.uuid4().hex[:8],
                        "cell_type": msg.get("cellType", "code"),
-                       "source": "", "outputs": [],
+                       "source": msg.get("source", ""), "outputs": [],
                        "execution_count": None, "running": False}
+                # insert after afterId; unknown/empty afterId -> insert at top
                 idx = next((i for i, c in enumerate(state.cells)
-                            if c["id"] == msg.get("afterId")), len(state.cells) - 1)
+                            if c["id"] == msg.get("afterId")), -1)
                 state.cells.insert(idx + 1, new)
                 await broadcast({"type": "add", "cell": new,
                                  "afterId": msg.get("afterId")})
+                schedule_autosave()
             elif t == "settype":
                 c = state.by_id(msg["cellId"])
                 if c is not None:
@@ -320,9 +382,11 @@ async def ws(websocket: WebSocket):
                     c["execution_count"] = None
                 await broadcast({"type": "settype", "cellId": msg["cellId"],
                                  "cellType": msg["cellType"]})
+                schedule_autosave()
             elif t == "delete":
                 state.cells = [c for c in state.cells if c["id"] != msg["cellId"]]
                 await broadcast({"type": "delete", "cellId": msg["cellId"]})
+                schedule_autosave()
             elif t == "save":
                 save_notebook()
                 await broadcast({"type": "saved"})

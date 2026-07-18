@@ -8,8 +8,9 @@ env/
 # Jupyter
 .ipynb_checkpoints/
 
-# collab app: local tunnel binary
+# collab app: local tunnel binary + autosaved live state
 collab/.bin/
+collab/.state/
 
 # OS
 .DS_Store

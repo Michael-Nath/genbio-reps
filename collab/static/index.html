@@ -128,7 +128,7 @@
 <script>
 let ws, me = {}, cells = [], users = [];
 let selected = null, mode = "command";        // "command" | "edit"
-let clipboard = null, pendingSelectAfter = null, pendingPaste = null;
+let clipboard = null, pendingSelectAfter = null;
 let lastD = 0;
 const editors = {};                            // cellId -> CodeMirror instance
 const $ = (id) => document.getElementById(id);
@@ -172,22 +172,20 @@ function handle(m) {
     case "run_done": { const c=cells.find(x=>x.id===m.cellId); if(c){c.running=false;c.execution_count=m.execution_count;} setRunning(m.cellId,false); setCount(m.cellId,m.execution_count); break; }
     case "add": {
       const i = cells.findIndex(x=>x.id===m.afterId);
-      cells.splice(i+1, 0, m.cell); renderAll();
-      if (m.afterId === pendingSelectAfter) {
+      cells.splice(i+1, 0, m.cell);
+      insertCellDom(m.cell, m.afterId);          // surgical insert — no full re-render
+      if (m.afterId === pendingSelectAfter) {     // I initiated this add
         pendingSelectAfter = null;
-        if (pendingPaste) { const p=pendingPaste; pendingPaste=null;
-          if (p.cell_type==="markdown") send({type:"settype",cellId:m.cell.id,cellType:"markdown"});
-          send({type:"edit", cellId:m.cell.id, source:p.source});
-          m.cell.source = p.source; m.cell.cell_type = p.cell_type;
-        }
-        selectCell(m.cell.id, false);
+        selectCell(m.cell.id, m.cell.cell_type === "code");
       }
       break; }
     case "delete": {
       const wasSel = selected===m.cellId;
       const idx = cells.findIndex(x=>x.id===m.cellId);
-      cells = cells.filter(x=>x.id!==m.cellId); renderAll();
-      if (wasSel) { const n = cells[Math.min(idx, cells.length-1)]; if(n) selectCell(n.id, false); }
+      cells = cells.filter(x=>x.id!==m.cellId);
+      const el = $("cell-"+m.cellId); if (el) el.remove();   // surgical remove
+      delete editors[m.cellId];
+      if (wasSel) { const n = cells[Math.min(idx, cells.length-1)]; if(n) selectCell(n.id, false); else selected=null; }
       break; }
     case "saved": flash("saved to .ipynb ✓"); break;
   }
@@ -211,6 +209,16 @@ function rebuildCell(c) {
   delete editors[c.id];
   const fresh = buildCell(c); old.replaceWith(fresh);   // attach first
   initEditor(c);                                        // then build editor in-DOM
+  renderPresenceTags();
+}
+
+function insertCellDom(cell, afterId) {
+  const root = $("cells");
+  const el = buildCell(cell);
+  const ref = afterId ? $("cell-"+afterId) : null;
+  if (ref) root.insertBefore(el, ref.nextSibling);      // after the ref cell
+  else root.insertBefore(el, root.firstChild);          // empty afterId -> top
+  initEditor(cell);                                     // build editor in-DOM
   renderPresenceTags();
 }
 
@@ -373,11 +381,12 @@ function runAndAdvance(id) {
   const i = cells.findIndex(x=>x.id===id);
   if (i < cells.length-1) selectCell(cells[i+1].id, false);
 }
-function addCell(refId, where) {
+function addCell(refId, where, opts) {
+  opts = opts || {};
   const i = cells.findIndex(x=>x.id===refId);
   const afterId = where==="above" ? (i>0 ? cells[i-1].id : "") : refId;
   pendingSelectAfter = afterId;
-  send({type:"add", afterId, cellType:"code"});
+  send({type:"add", afterId, cellType: opts.cellType||"code", source: opts.source||""});
 }
 function setType(id, t) { send({type:"settype", cellId:id, cellType:t}); }
 
@@ -402,7 +411,7 @@ document.addEventListener("keydown", (e) => {
     case "k": case "ArrowUp": e.preventDefault(); moveSel(-1); break;
     case "c": e.preventDefault(); { const cc=cells.find(x=>x.id===selected); if(cc) clipboard={cell_type:cc.cell_type, source:cc.source}; } break;
     case "x": e.preventDefault(); { const cc=cells.find(x=>x.id===selected); if(cc){ clipboard={cell_type:cc.cell_type, source:cc.source}; send({type:"delete",cellId:selected}); } } break;
-    case "v": e.preventDefault(); if (clipboard){ pendingPaste={...clipboard}; addCell(selected,"below"); } break;
+    case "v": e.preventDefault(); if (clipboard){ addCell(selected,"below",{source:clipboard.source, cellType:clipboard.cell_type}); } break;
     case "d":
       if (Date.now() - lastD < 500) { lastD = 0; send({type:"delete", cellId:selected}); }
       else lastD = Date.now();

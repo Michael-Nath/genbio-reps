@@ -45,8 +45,23 @@ Run a different notebook / port:
 - **Shared execution** — outputs stream to everyone: text, matplotlib images,
   and tracebacks, all from one shared kernel.
 - **Run all / Interrupt** and **Save to .ipynb** (writes cells + outputs back to
-  the file, so your progress is committable).
+  the real notebook, so your progress is committable).
 - **Presence** — who's connected, and where their cursor is.
+
+## Persistence (survives restarts)
+
+Live state — every cell's source, type, and **outputs** — is autosaved
+(debounced ~1.2s, and after every run) to a gitignored sidecar at
+`collab/.state/<notebook>.autosave.ipynb`. On startup the server restores from
+that sidecar if it exists, so **restarting the server resumes exactly where you
+left off**. Browser reloads never lose state (the server holds it).
+
+- The **pristine notebook is only touched by the 💾 Save button** — autosave goes
+  to the sidecar, so your teaching notebook stays clean until you choose to commit.
+- **Start fresh** from the original notebook: stop the server and
+  `rm -rf collab/.state`.
+- Caveat: cell content + outputs persist, but **live kernel variables do not**
+  survive a restart — hit **Run all** to rebuild them.
 
 ## How it works
 
