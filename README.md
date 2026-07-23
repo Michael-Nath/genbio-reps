@@ -9,6 +9,13 @@ Colab ships with numpy/matplotlib/torch preinstalled, so the notebooks just run.
 
 - 0.1 Proteins as tensors — [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Michael-Nath/genbio-reps/blob/main/00_foundations/01_proteins_as_tensors.ipynb)
 - 0.2 The oracle mindset — [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Michael-Nath/genbio-reps/blob/main/00_foundations/02_the_oracle_mindset.ipynb)
+- 1.1 Autoregressive sequence model — [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Michael-Nath/genbio-reps/blob/main/01_generative_cores/01_autoregressive_sequence_model.ipynb)
+- 1.2 Masked language model — [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Michael-Nath/genbio-reps/blob/main/01_generative_cores/02_masked_language_model.ipynb)
+- 1.3 Continuous diffusion (DDPM) — [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Michael-Nath/genbio-reps/blob/main/01_generative_cores/03_continuous_diffusion_ddpm.ipynb)
+- 1.4 Flow matching — [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Michael-Nath/genbio-reps/blob/main/01_generative_cores/04_flow_matching.ipynb)
+- 1.5 Discrete / masked diffusion — [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Michael-Nath/genbio-reps/blob/main/01_generative_cores/05_discrete_masked_diffusion.ipynb)
+- 1.6 SE(3) frame diffusion — [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Michael-Nath/genbio-reps/blob/main/01_generative_cores/06_se3_frame_diffusion.ipynb)
+- 2.1 Conditional generation & CFG — [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Michael-Nath/genbio-reps/blob/main/02_control/01_conditional_generation_cfg.ipynb)
 
 While the repo is **private**, the first click needs a one-time grant: in Colab,
 `File -> Open notebook -> GitHub`, tick *Include private repos*, and authorize.

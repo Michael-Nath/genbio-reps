@@ -2,9 +2,9 @@
 numpy
 matplotlib
 jupyter
+torch              # 1.1 onward (autoregressive, diffusion, RL)
 
 # Added as later tracks need them (uncomment when you get there):
-# torch            # 1.1 onward (autoregressive, diffusion, RL)
 # biotite          # loading real PDB structures
 # fair-esm         # pretrained protein language models (Track 3)
 # scikit-learn     # oracles / Bayesian optimization (Track 3)
