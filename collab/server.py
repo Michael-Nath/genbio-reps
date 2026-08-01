@@ -29,6 +29,14 @@ try:
 except Exception:
     _PyflakesChecker = None
 
+try:
+    # Jupyter's own input transformer. Lets the linter see what the *kernel*
+    # sees, so `np.array?`, `%timeit`, and `!pip install` aren't syntax errors.
+    from IPython.core.inputtransformer2 import TransformerManager
+    _ipy_transform = TransformerManager().transform_cell
+except Exception:
+    _ipy_transform = None
+
 ROOT = Path(__file__).resolve().parent
 REPO_ROOT = ROOT.parent
 
@@ -42,6 +50,10 @@ STATE_DIR = ROOT / ".state"
 
 EXCLUDE_DIRS = {".venv", "venv", "node_modules", ".git",
                 ".ipynb_checkpoints", "collab", "__pycache__"}
+
+# Cap on retained stdout/stderr per cell. A runaway training loop shouldn't be
+# able to grow the autosave file (or a joiner's payload) without bound.
+MAX_STREAM_CHARS = 200_000
 
 
 def discover_notebooks():
@@ -82,7 +94,10 @@ class Session:
     def __init__(self, slug, nb_path):
         self.slug = slug
         self.nb_path = nb_path
-        self.state_path = STATE_DIR / (nb_path.stem + ".autosave.ipynb")
+        # Keyed on the slug, not the stem: two notebooks with the same filename
+        # in different folders must not share one sidecar.
+        self.state_path = STATE_DIR / (slug + ".autosave.ipynb")
+        self._migrate_legacy_state()
         self.cells = self._load_cells()
         self.run_lock = asyncio.Lock()
         self.clients = {}  # client_id -> {ws, name, color, cell}
@@ -90,6 +105,26 @@ class Session:
         self.kc = None
         self._kernel_lock = asyncio.Lock()
         self._save_task = None
+        self._stop_all = False
+        self._pending_runs = set()
+        self._run_all_task = None
+
+    def _migrate_legacy_state(self):
+        """Adopt a sidecar written before sidecars were slug-keyed.
+
+        Old name was `<stem>.autosave.ipynb`. Claim it once, so existing work
+        carries over instead of silently reverting to the pristine notebook.
+        """
+        legacy = STATE_DIR / (self.nb_path.stem + ".autosave.ipynb")
+        if legacy == self.state_path or not legacy.exists():
+            return
+        if self.state_path.exists():
+            return
+        try:
+            legacy.rename(self.state_path)
+            print(f"[{self.slug}] migrated autosave {legacy.name} -> {self.state_path.name}")
+        except OSError as e:
+            print(f"[{self.slug}] could not migrate {legacy.name}:", e)
 
     def _load_cells(self):
         # prefer the autosaved working state; fall back to the original notebook
@@ -175,8 +210,80 @@ class Session:
             except Exception:
                 pass
 
+    async def restart_kernel(self):
+        """Wipe the shared namespace and start clean — the escape hatch for a
+        wedged kernel, which otherwise needed killing the whole server."""
+        self._stop_all = True
+        if self.km is None:
+            await self.ensure_kernel()
+        else:
+            async with self._kernel_lock:
+                try:
+                    await self.km.restart_kernel(now=True)
+                    await self.kc.wait_for_ready(timeout=60)
+                except Exception as e:
+                    print(f"[{self.slug}] restart failed:", e)
+                await self._silent_exec("%matplotlib inline")
+        for c in self.cells:
+            c["execution_count"] = None
+            c["running"] = False
+        await self.broadcast({"type": "kernel_restarted"})
+        self.schedule_autosave()
+
+    async def interrupt(self):
+        """Stop the current cell and abandon the rest of a Run all."""
+        self._stop_all = True
+        if self.km is not None:
+            await self.km.interrupt_kernel()
+
     # ------------------------------ run ----------------------------------- #
-    async def run_cell(self, cell_id):
+    async def _emit(self, cell, out):
+        """Record an output and push it to everyone.
+
+        Consecutive chunks on the same stream are merged, the way Jupyter does
+        it: a loop printing 10k lines becomes one output instead of 10k, which
+        keeps the autosave, the .ipynb, and a late joiner's `init` payload sane.
+        Only the tail is kept past MAX_STREAM_CHARS — for a training loop the
+        last lines are the ones you want.
+        """
+        outs = cell["outputs"]
+        if (out["output_type"] == "stream" and outs
+                and outs[-1]["output_type"] == "stream"
+                and outs[-1]["name"] == out["name"]):
+            merged = outs[-1]["text"] + out["text"]
+            outs[-1]["text"] = merged[-MAX_STREAM_CHARS:]
+        else:
+            outs.append(out)
+        await self.broadcast({"type": "output", "cellId": cell["id"], "output": out})
+
+    def queue_run(self, cell_id, by=None):
+        """Schedule one execution of a cell, at most once at a time.
+
+        Two people hammering Shift-Enter on the same cell used to spawn a task
+        per keypress, all of them queueing on run_lock and re-running the cell.
+        Collapsing to one pending execution keeps the shared kernel sane.
+        """
+        if cell_id in self._pending_runs:
+            return
+        cell = self.by_id(cell_id)
+        if not cell or cell["cell_type"] != "code":
+            return
+        self._pending_runs.add(cell_id)
+
+        async def _go():
+            try:
+                await self.run_cell(cell_id, by=by)
+            finally:
+                self._pending_runs.discard(cell_id)
+
+        asyncio.create_task(_go())
+
+    def queue_run_all(self):
+        if self._run_all_task and not self._run_all_task.done():
+            return                     # already sweeping; don't interleave
+        self._run_all_task = asyncio.create_task(self.run_all())
+
+    async def run_cell(self, cell_id, by=None):
         cell = self.by_id(cell_id)
         if not cell or cell["cell_type"] != "code":
             return
@@ -185,61 +292,67 @@ class Session:
             cell["outputs"] = []
             cell["running"] = True
             cell["execution_count"] = None
-            await self.broadcast({"type": "run_start", "cellId": cell_id})
-            msg_id = self.kc.execute(cell["source"])
-            while True:
-                try:
-                    msg = await self.kc.get_iopub_msg(timeout=120)
-                except Exception:
-                    break
-                if msg["parent_header"].get("msg_id") != msg_id:
-                    continue
-                mtype = msg["msg_type"]
-                content = msg["content"]
-                out = None
-                if mtype == "status":
-                    if content["execution_state"] == "idle":
+            # `by` lets every other client follow the runner to this cell.
+            await self.broadcast({"type": "run_start", "cellId": cell_id, "by": by})
+            try:
+                msg_id = self.kc.execute(cell["source"])
+                while True:
+                    try:
+                        msg = await self.kc.get_iopub_msg(timeout=120)
+                    except Exception:
                         break
-                elif mtype == "execute_input":
-                    cell["execution_count"] = content.get("execution_count")
-                elif mtype == "stream":
-                    out = {"output_type": "stream",
-                           "name": content["name"], "text": content["text"]}
-                elif mtype in ("execute_result", "display_data"):
-                    out = {"output_type": mtype, "data": content["data"]}
-                elif mtype == "error":
-                    out = {"output_type": "error",
-                           "ename": content["ename"],
-                           "evalue": content["evalue"],
-                           "traceback": [ANSI.sub("", t) for t in content["traceback"]]}
-                if out is not None:
-                    cell["outputs"].append(out)
-                    await self.broadcast({"type": "output", "cellId": cell_id, "output": out})
-            # Drain the shell reply and surface `obj?` / `obj??` help, which IPython
-            # returns as a "page" payload on the shell channel (not via iopub).
-            for _ in range(10):
-                try:
-                    reply = await self.kc.get_shell_msg(timeout=5)
-                except Exception:
+                    if msg["parent_header"].get("msg_id") != msg_id:
+                        continue
+                    mtype = msg["msg_type"]
+                    content = msg["content"]
+                    out = None
+                    if mtype == "status":
+                        if content["execution_state"] == "idle":
+                            break
+                    elif mtype == "execute_input":
+                        cell["execution_count"] = content.get("execution_count")
+                    elif mtype == "stream":
+                        out = {"output_type": "stream",
+                               "name": content["name"], "text": content["text"]}
+                    elif mtype in ("execute_result", "display_data"):
+                        out = {"output_type": mtype, "data": content["data"]}
+                    elif mtype == "error":
+                        out = {"output_type": "error",
+                               "ename": content["ename"],
+                               "evalue": content["evalue"],
+                               "traceback": [ANSI.sub("", t) for t in content["traceback"]]}
+                    if out is not None:
+                        await self._emit(cell, out)
+                # Drain the shell reply and surface `obj?` / `obj??` help, which IPython
+                # returns as a "page" payload on the shell channel (not via iopub).
+                for _ in range(10):
+                    try:
+                        reply = await self.kc.get_shell_msg(timeout=5)
+                    except Exception:
+                        break
+                    if reply["parent_header"].get("msg_id") != msg_id:
+                        continue
+                    for p in reply["content"].get("payload", []):
+                        if p.get("source") == "page":
+                            text = p.get("data", {}).get("text/plain", "")
+                            if text:
+                                await self._emit(cell, {"output_type": "stream",
+                                                        "name": "stdout",
+                                                        "text": ANSI.sub("", text)})
                     break
-                if reply["parent_header"].get("msg_id") != msg_id:
-                    continue
-                for p in reply["content"].get("payload", []):
-                    if p.get("source") == "page":
-                        text = p.get("data", {}).get("text/plain", "")
-                        if text:
-                            o = {"output_type": "stream", "name": "stdout",
-                                 "text": ANSI.sub("", text)}
-                            cell["outputs"].append(o)
-                            await self.broadcast({"type": "output", "cellId": cell_id, "output": o})
-                break
-            cell["running"] = False
-            await self.broadcast({"type": "run_done", "cellId": cell_id,
-                                  "execution_count": cell["execution_count"]})
-            self.schedule_autosave()
+            finally:
+                # Never leave a cell stuck on [*] — a dead kernel or a dropped
+                # channel must still clear the spinner for everyone.
+                cell["running"] = False
+                await self.broadcast({"type": "run_done", "cellId": cell_id,
+                                      "execution_count": cell["execution_count"]})
+                self.schedule_autosave()
 
     async def run_all(self):
+        self._stop_all = False
         for c in list(self.cells):
+            if self._stop_all:      # Interrupt abandons the queue, as in Jupyter
+                break
             if c["cell_type"] == "code":
                 await self.run_cell(c["id"])
 
@@ -304,7 +417,10 @@ class Session:
     # ------------------------------- info ----------------------------------- #
     def info(self):
         has_autosave = self.state_path.exists()
-        mtime = (self.state_path if has_autosave else self.nb_path).stat().st_mtime
+        try:
+            mtime = (self.state_path if has_autosave else self.nb_path).stat().st_mtime
+        except OSError:      # notebook deleted out from under a live session
+            mtime = 0.0
         return {
             "slug": self.slug,
             "name": self.nb_path.stem,
@@ -321,13 +437,26 @@ class Session:
 sessions: dict[str, Session] = {}
 
 
-def init_sessions():
+def sync_sessions():
+    """Rescan the repo for notebooks.
+
+    Called on startup and whenever the session list is fetched, so a notebook
+    added (or renamed, or deleted) while the server is up shows up without a
+    restart. A session with people or a kernel in it is never dropped.
+    """
+    seen = set()
     for p in discover_notebooks():
         slug = slug_for(p)
-        sessions[slug] = Session(slug, p)
+        seen.add(slug)
+        if slug not in sessions:
+            sessions[slug] = Session(slug, p)
+    for slug in [s for s in sessions if s not in seen]:
+        s = sessions[slug]
+        if not s.clients and s.kc is None:
+            sessions.pop(slug, None)
 
 
-init_sessions()
+sync_sessions()
 
 
 # --------------------------------------------------------------------------- #
@@ -335,29 +464,56 @@ init_sessions()
 # the concatenation of ALL code cells for name/usage warnings, so names defined
 # in other cells don't produce false "undefined name" / "unused import" noise.
 # --------------------------------------------------------------------------- #
+
+# Names IPython injects into the namespace. Real at runtime, invisible to
+# pyflakes — without these, every transformed magic reports "undefined name".
+_IPY_BUILTINS = ["get_ipython", "display", "In", "Out", "exit", "quit"]
+
+
+def _to_python(src):
+    """IPython source -> plain Python, plus whether line numbers survived.
+
+    Line magics (`%timeit x`), shell escapes (`!pip ...`) and `obj?` each map to
+    one line, so diagnostics stay aligned. A cell magic (`%%time`) collapses the
+    whole cell to a single call: we keep the transformed text so names defined
+    there still resolve for other cells, but flag it as unaligned so we don't
+    report diagnostics against the wrong lines.
+    """
+    if _ipy_transform is None:
+        return src, True
+    try:
+        out = _ipy_transform(src)
+    except Exception:
+        return src, True   # transformer choked (mid-typing); lint the raw text
+    return out, len(out.splitlines()) == len(src.splitlines())
+
+
 def lint_cell(sources, idx):
     if idx < 0 or idx >= len(sources):
         return []
-    target = sources[idx]
+    transformed = [_to_python(s) for s in sources]
+    target, aligned = transformed[idx]
     try:
         ast.parse(target)
     except SyntaxError as e:
+        if not aligned:
+            return []
         return [{"line": (e.lineno or 1) - 1,
                  "col": max((e.offset or 1) - 1, 0),
                  "message": f"SyntaxError: {e.msg}", "severity": "error"}]
-    if _PyflakesChecker is None:
+    if _PyflakesChecker is None or not aligned:
         return []
     combined, offsets, ln = "", [], 1
-    for s in sources:
+    for s, _ in transformed:
         offsets.append(ln)
         combined += s + "\n"
         ln += s.count("\n") + 1
     start = offsets[idx]
-    end = start + target.count("\n")
+    end = start + max(len(target.splitlines()), 1) - 1
     out = []
     try:
         tree = ast.parse(combined)
-        checker = _PyflakesChecker(tree, filename="cells")
+        checker = _PyflakesChecker(tree, filename="cells", builtins=_IPY_BUILTINS)
         for m in checker.messages:
             if start <= m.lineno <= end:
                 out.append({"line": m.lineno - start,
@@ -377,6 +533,7 @@ app = FastAPI()
 
 @app.get("/api/sessions")
 async def api_sessions():
+    sync_sessions()
     infos = [s.info() for s in sessions.values()]
     infos.sort(key=lambda x: x["last_modified"], reverse=True)
     return infos
@@ -385,7 +542,25 @@ async def api_sessions():
 @app.post("/lint/{slug}")
 async def lint(slug: str, request: Request):
     data = await request.json()
-    return lint_cell(data.get("sources", []), int(data.get("index", 0)))
+    if "sources" in data:                    # explicit form, used by test_client
+        return lint_cell(data["sources"], int(data.get("index", 0)))
+    # Normal path: the client sends only the cell it's typing in. The server
+    # already holds every other cell's source, so a keystroke no longer ships
+    # the whole notebook — that was the main source of lag when two people
+    # typed at once over a tunnel.
+    session = sessions.get(slug)
+    if session is None:
+        return []
+    sources, idx = [], -1
+    for c in session.cells:
+        if c["cell_type"] != "code":
+            continue
+        if c["id"] == data.get("cellId"):
+            idx = len(sources)
+            sources.append(data.get("source", ""))
+        else:
+            sources.append(c["source"])
+    return lint_cell(sources, idx) if idx >= 0 else []
 
 
 @app.on_event("shutdown")
@@ -402,12 +577,16 @@ async def index():
 @app.get("/n/{slug}")
 async def notebook_page(slug: str):
     if slug not in sessions:
+        sync_sessions()          # may be a notebook added since startup
+    if slug not in sessions:
         return FileResponse(ROOT / "static" / "sessions.html")
     return FileResponse(ROOT / "static" / "notebook.html")
 
 
 @app.websocket("/ws/{slug}")
 async def ws(websocket: WebSocket, slug: str):
+    if slug not in sessions:
+        sync_sessions()
     session = sessions.get(slug)
     if session is None:
         await websocket.close(code=4404)
@@ -437,12 +616,13 @@ async def ws(websocket: WebSocket, slug: str):
                                          "source": msg["source"], "from": cid}, exclude=cid)
                 session.schedule_autosave()
             elif t == "run":
-                asyncio.create_task(session.run_cell(msg["cellId"]))
+                session.queue_run(msg["cellId"], by=cid)
             elif t == "run_all":
-                asyncio.create_task(session.run_all())
+                session.queue_run_all()
             elif t == "interrupt":
-                if session.km is not None:
-                    await session.km.interrupt_kernel()
+                await session.interrupt()
+            elif t == "restart":
+                asyncio.create_task(session.restart_kernel())
             elif t == "presence":
                 session.clients[cid]["cell"] = msg.get("cell")
                 await session.broadcast({"type": "presence", "users": session.presence()})

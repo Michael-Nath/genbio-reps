@@ -49,29 +49,47 @@ notebook spins up its kernel; it's shared by everyone who joins after.
 - **Live Python linting** — `pyflakes` runs on the backend as you type
   (undefined names, unused imports, syntax errors) with squiggles + gutter marks.
   Cross-cell names are understood, so `np` defined in an earlier cell isn't
-  flagged in a later one.
+  flagged in a later one. Cells go through IPython's own input transformer
+  first, so `np.array?`, `%timeit`, and `!pip install` are linted as the Python
+  they actually become — not reported as syntax errors.
 - **Jupyter keyboard model** — command mode (blue) vs edit mode (green):
   - `Esc` command · `Enter` edit
   - `A`/`B` insert above/below · `D` `D` delete · `M`/`Y` markdown/code
   - `J`/`K` (or arrows) move selection · `C`/`X`/`V` copy/cut/paste cell
   - `Shift-Enter` run + next · `Ctrl/Cmd-Enter` run · `Alt-Enter` run + insert
   - `Cmd//Ctrl-/` toggle comment · `Tab`/`Shift-Tab` indent
-- **Live cell editing** — typing syncs to your partner (~90ms debounce); the cell
-  someone else is in is tagged with their name/color.
+- **Live cell editing** — typing syncs to your partner (~90ms debounce). Incoming
+  text is applied as a minimal patch to just the run of characters that changed,
+  so it lands *while you're typing* without moving your caret or re-rendering the
+  cell. (It used to be skipped entirely whenever you had the cell focused, which
+  left the two of you silently out of sync.)
+- **Sharing a cell is safe** — you see your partner's caret inside the editor in
+  their colour, and the cell turns amber with a "both editing" tag when you're
+  both in it. Same-*region* edits are still last-write-wins, so the caret is what
+  keeps you off each other's lines.
+- **Follow the runner** — when your partner hits Shift-Enter, their cell scrolls
+  into view for you too and pulses, so you're both watching the same execution.
+  Toggle it off with the **follow** checkbox in the header; it never steals your
+  caret while you're mid-edit.
 - **Shared execution** — outputs stream to everyone: text, matplotlib images,
-  and tracebacks, all from one shared kernel.
+  and tracebacks, all from one shared kernel. Consecutive stdout/stderr chunks
+  merge into one output the way Jupyter does, so a training loop printing
+  thousands of lines stays one block (the last ~200k chars are kept).
 - **Inline docs (`?` / `??`)** — end a line with `obj?` for the signature +
   docstring, or `obj??` for the source (e.g. `np.array?`, `tilted_resample??`).
   Works just like Jupyter (rendered from IPython's help "page" payload).
-- **Run all / Interrupt** and **Save to .ipynb** (writes cells + outputs back to
-  the real notebook, so your progress is committable).
+- **Run all / Interrupt / Restart kernel** and **Save to .ipynb** (writes cells +
+  outputs back to the real notebook, so your progress is committable). Interrupt
+  abandons the rest of a Run all instead of ploughing on to the next cell;
+  Restart clears the shared namespace for everyone (cells and outputs survive).
 - **Presence** — who's connected, and where their cursor is.
 
 ## Persistence (survives restarts)
 
 Live state — every cell's source, type, and **outputs** — is autosaved per
 notebook (debounced ~1.2s, and after every run) to a gitignored sidecar at
-`collab/.state/<notebook>.autosave.ipynb`. On startup the server restores each
+`collab/.state/<slug>.autosave.ipynb` (slug = the full path, so two notebooks
+with the same filename in different folders keep separate state). On startup the server restores each
 session from its sidecar if one exists, so **restarting the server resumes
 exactly where you left off**, for every notebook. Browser reloads never lose
 state (the server holds it).
@@ -82,6 +100,8 @@ state (the server holds it).
   `rm -rf collab/.state`.
 - Caveat: cell content + outputs persist, but **live kernel variables do not**
   survive a restart — hit **Run all** to rebuild them.
+- Notebooks added to the repo while the server is running are picked up on the
+  next session-list refresh; no restart needed.
 
 ## How it works
 
@@ -98,14 +118,23 @@ state (the server holds it).
   `/n/<slug>`. Renders cells, syncs edits, streams outputs, renders markdown
   (marked.js).
 - `share.sh` — server + `cloudflared` quick tunnel (binary auto-downloaded to
-  `.bin/`, which is gitignored). `test_client.py` is the integration test.
+  `.bin/`, which is gitignored).
+- `test_client.py` — two-client integration test: connects A and B, runs cells
+  on A, and asserts B sees the streams, images, edits, and kernel restarts.
+  Start the server, then `.venv/bin/python test_client.py [port] [slug]`
+  (defaults: port 8000, first session the server reports).
 
 ## Notes / caveats
 
 - One shared kernel = one shared namespace. Great for pairing; if you both hit Run
-  at once, executions queue (a lock serializes them).
+  at once, executions queue (a lock serializes them). Repeat requests for a cell
+  that's already running are dropped rather than queued, so leaning on
+  Shift-Enter can't stack up a dozen executions.
 - The trycloudflare URL is ephemeral — a new one each run. Fine for a session.
-- Edits are last-write-wins per cell (no OT/CRDT). Perfect for two people pairing;
-  don't type into the *same* cell simultaneously.
+- Edits are last-write-wins per cell (no OT/CRDT), but they converge: the server
+  serializes edits and every client applies the same latest text, so you can't
+  drift apart. What you can still lose is a keystroke typed inside the ~90ms
+  send window while your partner's version lands on the *same* lines. Different
+  lines of the same cell are fine — watch their caret and you'll be fine.
 - Anyone with the URL can run code on your machine. Only share with your friend,
   and stop the tunnel when done.
