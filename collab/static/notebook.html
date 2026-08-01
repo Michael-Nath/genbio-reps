@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>reps — live notebook</title>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<!-- KaTeX for LaTeX in markdown cells ($…$ inline, $$…$$ display) -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
 <!-- CodeMirror 5 (zero-build, via CDN) -->
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/material-darker.min.css">
@@ -17,6 +20,11 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/comment/comment.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/selection/active-line.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/lint/lint.min.js"></script>
+<!-- Vim mode (optional, toggled from the header). dialog + searchcursor back vim's :/ commands -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/dialog/dialog.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/dialog/dialog.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/search/searchcursor.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/keymap/vim.min.js"></script>
 <style>
   :root { --bg:#0f1216; --panel:#171b21; --panel2:#1d2229; --line:#2a313a;
           --text:#e6e9ee; --muted:#8b95a3; --accent:#4c9aff; --run:#2ea043;
@@ -35,6 +43,8 @@
   .users { display:flex; gap:6px; align-items:center; }
   .chip { display:flex; align-items:center; gap:5px; padding:3px 9px;
           border-radius:999px; background:var(--panel2); font-size:12px; }
+  .chip.followable { cursor:pointer; }
+  .chip.followable:hover { background:var(--line); }
   .dot { width:9px; height:9px; border-radius:50%; }
   button { font:inherit; color:var(--text); background:var(--panel2);
            border:1px solid var(--line); border-radius:6px; padding:5px 10px;
@@ -59,6 +69,11 @@
                    letter-spacing:.06em; margin-right:auto; }
   .presence-tags { display:flex; gap:4px; margin-left:6px; }
   .ptag { font-size:10px; padding:1px 6px; border-radius:999px; color:#000; }
+  /* a friend's live caret + selection, drawn inside the editor */
+  .remote-caret { border-left:2px solid; margin-left:-1px; position:relative; z-index:4; }
+  .remote-caret-flag { position:absolute; top:-1.35em; left:-1px; font-size:9px; line-height:1.5;
+                       padding:0 4px; border-radius:3px 3px 3px 0; color:#000; white-space:nowrap;
+                       pointer-events:none; opacity:.92; }
   .editor-host { }
   .CodeMirror { height:auto; background:transparent; font-size:13px;
                 font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
@@ -70,6 +85,9 @@
              font-family:ui-monospace,Menlo,monospace; font-size:12px; }
   .md pre { background:var(--panel2); padding:10px; border-radius:6px; overflow:auto; }
   .md table { border-collapse:collapse; } .md th,.md td { border:1px solid var(--line); padding:4px 8px; }
+  /* KaTeX: don't let a wide display equation blow out the layout */
+  .md .katex-display { overflow-x:auto; overflow-y:hidden; padding:4px 0; margin:8px 0; }
+  .md .katex { font-size:1.05em; }
   .outputs { border-top:1px solid var(--line); padding:8px 14px;
              font-family:ui-monospace,Menlo,monospace; font-size:12.5px; }
   .outputs:empty { display:none; padding:0; border:0; }
@@ -88,6 +106,10 @@
   .modal .keys { font-size:12px; color:var(--muted); line-height:1.8; }
   kbd { background:var(--panel2); border:1px solid var(--line); border-radius:4px;
         padding:0 5px; font-size:11px; font-family:ui-monospace,Menlo,monospace; }
+  #vimToggle { font-size:12px; padding:4px 9px; }
+  #vimToggle.on { background:var(--accent); border-color:transparent; color:white; }
+  /* vim's fat block cursor, tinted to the theme accent */
+  .cm-fat-cursor .CodeMirror-cursor { background:var(--accent) !important; }
 </style>
 </head>
 <body>
@@ -97,6 +119,7 @@
   <span class="nb" id="nbname">—</span>
   <span id="status" class="khint">connecting…</span>
   <span class="spacer"></span>
+  <button id="vimToggle" onclick="toggleVim()" title="Toggle Vim key bindings in the editors">Vim: off</button>
   <span class="khint"><b>Esc</b> cmd · <b>Enter</b> edit · <b>A/B</b> add · <b>DD</b> del · <b>M/Y</b> md/code · <b>⇧⏎</b> run</span>
   <div class="users" id="users"></div>
 </header>
@@ -121,7 +144,9 @@
       <kbd>Enter</kbd> edit<br>
       <b>Edit mode</b> (green): <kbd>Esc</kbd> command ·
       <kbd>⇧⏎</kbd> run+next · <kbd>⌃⏎</kbd> run · <kbd>⌥⏎</kbd> run+insert ·
-      <kbd>⌘/</kbd> comment
+      <kbd>⌘/</kbd> comment<br>
+      <b>Vim</b>: toggle the <b>Vim</b> button in the header. In edit mode,
+      <kbd>Esc</kbd> goes insert→normal; <kbd>Esc</kbd> again leaves the cell.
     </div>
   </div>
 </div>
@@ -131,11 +156,25 @@ let ws, me = {}, cells = [], users = [];
 let selected = null, mode = "command";        // "command" | "edit"
 let clipboard = null, pendingSelectAfter = null;
 let lastD = 0;
+let following = null, followedCell = null;     // client id whose cursor we're following
+let remoteCursors = {};                        // from-id -> {marks:[...], cellId}
 const editors = {};                            // cellId -> CodeMirror instance
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const isMac = navigator.platform.toUpperCase().includes("MAC");
 const slug = location.pathname.split("/").filter(Boolean).pop();
+
+/* ------------------------------- vim mode ----------------------------- */
+let vimOn = localStorage.getItem("reps_vim") === "1";
+function applyVim() {                              // push the keymap to every editor
+  for (const id in editors) editors[id].setOption("keyMap", vimOn ? "vim" : "default");
+  const b = $("vimToggle");
+  if (b) { b.textContent = "Vim: " + (vimOn ? "on" : "off"); b.classList.toggle("on", vimOn); }
+}
+function toggleVim() {
+  vimOn = !vimOn; localStorage.setItem("reps_vim", vimOn ? "1" : "0"); applyVim();
+  const cm = selected && editors[selected]; if (cm && cm.hasFocus()) cm.focus();
+}
 
 function join() {
   me.name = ($("nameInput").value || "guest").trim();
@@ -161,9 +200,14 @@ function handle(m) {
   switch (m.type) {
     case "init":
       me.id = m.clientId; me.color = m.color; cells = m.cells; users = m.users;
-      $("nbname").textContent = m.notebook; renderAll(); renderUsers();
+      $("nbname").textContent = m.notebook;
+      document.title = m.notebook.replace(/\.ipynb$/, "") + " — reps";
+      renderAll(); renderUsers();
       if (cells[0]) selectCell(cells[0].id, false); break;
-    case "presence": users = m.users; renderUsers(); renderPresenceTags(); break;
+    case "presence": users = m.users; renderUsers(); renderPresenceTags(); followScroll(false);
+      Object.keys(remoteCursors).forEach(f => { if (!users.find(u => u.id === f)) clearRemote(f); });
+      break;
+    case "cursor": renderRemoteCursor(m.from, m.cellId, m.anchor, m.head); break;
     case "edit": applyRemoteEdit(m.cellId, m.source); break;
     case "settype": {
       const c = cells.find(x=>x.id===m.cellId); if(!c) break;
@@ -194,11 +238,38 @@ function handle(m) {
 }
 
 /* ---------------------------- rendering ------------------------------- */
+/* Register KaTeX as marked extensions so math is tokenized BEFORE marked's
+   inline rules run — otherwise `x_t` becomes <em> and `\alpha` gets mangled.
+   As extensions they also skip fenced/inline code automatically. */
+function katexHTML(tex, display) {
+  try { return katex.renderToString(tex, { displayMode: display, throwOnError: false }); }
+  catch (e) { return "<code>" + esc(tex) + "</code>"; }
+}
+if (window.marked && window.katex) {
+  marked.use({ extensions: [
+    { name: "mathBlock", level: "block",
+      start(src){ const i = src.indexOf("$$"); return i < 0 ? undefined : i; },
+      tokenizer(src){
+        const m = /^\$\$([\s\S]+?)\$\$/.exec(src);
+        if (m) return { type: "mathBlock", raw: m[0], text: m[1].trim() };
+      },
+      renderer(t){ return katexHTML(t.text, true); } },
+    { name: "mathInline", level: "inline",
+      start(src){ const i = src.indexOf("$"); return i < 0 ? undefined : i; },
+      tokenizer(src){
+        // single $…$ (not $$), no newline, non-empty; allow escaped \$ inside
+        const m = /^\$(?!\$)((?:\\.|[^\\$\n])+?)\$/.exec(src);
+        if (m) return { type: "mathInline", raw: m[0], text: m[1] };
+      },
+      renderer(t){ return katexHTML(t.text, false); } },
+  ]});
+}
 function renderMd(src) { try { return marked.parse(src||""); } catch(e){ return "<pre>"+esc(src)+"</pre>"; } }
 function esc(s){ return (s||"").replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
 
 function renderAll() {
   const root = $("cells"); root.innerHTML = "";
+  remoteCursors = {};                                   // editors are recreated -> drop stale marks
   for (const k in editors) delete editors[k];
   cells.forEach(c => root.appendChild(buildCell(c)));   // attach first
   cells.forEach(c => initEditor(c));                    // then build editors in-DOM
@@ -276,6 +347,7 @@ function initEditor(c) {
     gutters: isCode ? ["CodeMirror-lint-markers"] : [],
     lint: isCode ? { getAnnotations: pyLinter, async: true, delay: 400 } : false,
     extraKeys: cmKeys(c.id),
+    keyMap: vimOn ? "vim" : "default",         // honor the current Vim toggle
   });
   cm._cellId = c.id;
   cm.on("change", (inst, chg) => {
@@ -284,6 +356,7 @@ function initEditor(c) {
     sendEdit(inst._cellId, inst.getValue());
   });
   cm.on("focus", () => { selectCell(cm._cellId, false); setMode("edit"); });
+  cm.on("cursorActivity", () => { if (cm.hasFocus()) sendCursor(cm); });   // share my caret/selection
   editors[c.id] = cm;
   // markdown starts in rendered view (editor hidden) unless empty
   if (!isCode && (c.source||"").trim()) host.style.display = "none";
@@ -332,9 +405,15 @@ function cmKeys(id) {
   const runNext = cm => runAndAdvance(cm._cellId);
   const run = cm => { send({type:"run",cellId:cm._cellId}); };
   const runInsert = cm => { send({type:"run",cellId:cm._cellId}); addCell(cm._cellId,"below"); };
+  // Esc cooperates with vim: in vim INSERT mode, fall through so vim goes insert->normal;
+  // in vim NORMAL mode (or when vim is off) Esc leaves the cell to Jupyter command mode.
+  const esc = cm => {
+    if (vimOn && cm.state.vim && cm.state.vim.insertMode) return CodeMirror.Pass;
+    setMode("command");
+  };
   const k = {
     "Shift-Enter": runNext, "Ctrl-Enter": run, "Cmd-Enter": run,
-    "Alt-Enter": runInsert, "Esc": () => setMode("command"),
+    "Alt-Enter": runInsert, "Esc": esc,
     "Tab": cm => cm.somethingSelected() ? cm.execCommand("indentMore") : cm.replaceSelection("    "),
     "Shift-Tab": cm => cm.execCommand("indentLess"),
     "Ctrl-/": cm => cm.toggleComment(), "Cmd-/": cm => cm.toggleComment(),
@@ -429,16 +508,112 @@ function appendOut(id,o){ const c=$("out-"+id); if(c) c.appendChild(outNode(o));
 
 /* ---------------------------- presence -------------------------------- */
 function renderUsers(){
-  $("users").innerHTML = users.map(u =>
-    `<span class="chip"><span class="dot" style="background:${u.color}"></span>${esc(u.name)}${u.id===me.id?" (you)":""}</span>`).join("");
+  const root = $("users"); root.innerHTML = "";
+  users.forEach(u => {
+    const isMe = u.id === me.id, isF = u.id === following;
+    const chip = document.createElement("span");
+    chip.className = "chip" + (isMe ? "" : " followable") + (isF ? " following" : "");
+    chip.innerHTML = `<span class="dot" style="background:${u.color}"></span>` +
+      esc(u.name) + (isMe ? " (you)" : (isF ? " · following" : ""));
+    if (isF) chip.style.boxShadow = "0 0 0 2px " + u.color;
+    if (!isMe) {
+      chip.title = isF ? "Stop following " + u.name : "Follow " + u.name + "'s cursor";
+      chip.onclick = () => toggleFollow(u.id);
+    }
+    root.appendChild(chip);
+  });
+}
+function toggleFollow(uid){
+  following = (following === uid) ? null : uid;
+  followedCell = null;
+  renderUsers();
+  if (following) { followScroll(true); flash("following " + (users.find(u=>u.id===following)||{}).name); }
+}
+function followScroll(force){
+  if (!following) return;
+  const u = users.find(x => x.id === following);
+  if (!u) { following = null; renderUsers(); return; }     // they disconnected -> stop
+  if (!u.cell || (!force && u.cell === followedCell)) return;
+  followedCell = u.cell;
+  const el = $("cell-" + u.cell);
+  if (!el) return;
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  el.style.outline = "2px solid " + u.color; el.style.outlineOffset = "2px";   // brief highlight
+  setTimeout(() => { el.style.outline = ""; el.style.outlineOffset = ""; }, 900);
 }
 function renderPresenceTags(){
   document.querySelectorAll(".presence-tags").forEach(e => e.innerHTML="");
   users.forEach(u => { if(!u.cell || u.id===me.id) return;
     const pt=$("pt-"+u.cell); if(pt) pt.innerHTML += `<span class="ptag" style="background:${u.color}">${esc(u.name)}</span>`; });
 }
+
+/* -------------- live in-editor cursor/selection sharing --------------- */
+function hexA(hex, a){ const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`; }
+const posCmp = (p, q) => p.line !== q.line ? p.line - q.line : p.ch - q.ch;
+
+// Outgoing: rate-limited + dedup. Leading-edge (instant when you move after a pause),
+// with a trailing send inside the window, capped to ~22/s, and never sends the same spot twice.
+let cursorLastKey = "", cursorLastAt = 0, cursorTimer = null, cursorCm = null;
+function sendCursor(cm){
+  cursorCm = cm;
+  if (cursorTimer) return;                         // trailing send already scheduled
+  const emit = () => {
+    cursorTimer = null; cursorLastAt = performance.now();
+    const c = cursorCm; if (!c) return;
+    const a = c.getCursor("anchor"), h = c.getCursor("head");
+    const key = c._cellId + "|" + a.line + "," + a.ch + "|" + h.line + "," + h.ch;
+    if (key === cursorLastKey) return;             // position unchanged -> skip
+    cursorLastKey = key;
+    send({ type:"cursor", cellId:c._cellId, anchor:{line:a.line, ch:a.ch}, head:{line:h.line, ch:h.ch} });
+  };
+  const dt = performance.now() - cursorLastAt;
+  if (dt >= 45) emit();                            // been quiet -> send immediately
+  else cursorTimer = setTimeout(emit, 45 - dt);    // else coalesce to the window edge
+}
+
+// Incoming: reuse each friend's caret DOM + batch the mark swap in one CodeMirror op,
+// and skip entirely if their caret/selection hasn't moved.
+function clearRemote(from){
+  const r = remoteCursors[from]; if (!r) return;
+  r.marks.forEach(m => { try { m.clear(); } catch(e){} });
+  delete remoteCursors[from];
+}
+function makeCaret(u){
+  const caret = document.createElement("span"); caret.className = "remote-caret";
+  const flag = document.createElement("span"); flag.className = "remote-caret-flag";
+  caret.appendChild(flag); caret._flag = flag;
+  return caret;
+}
+function renderRemoteCursor(from, cellId, anchor, head){
+  const u = users.find(x => x.id === from);
+  if (!u || from === me.id || !anchor || !head) return;
+  const cm = editors[cellId]; if (!cm) return;
+  const key = cellId + "|" + anchor.line + "," + anchor.ch + "|" + head.line + "," + head.ch;
+  let r = remoteCursors[from];
+  if (r && r.key === key) return;                  // no visible change -> do nothing
+
+  const caret = (r && r.caretEl) || makeCaret(u);  // reuse the DOM node across updates
+  caret.style.borderColor = u.color; caret._flag.style.background = u.color;
+  if (caret._flag.textContent !== u.name) caret._flag.textContent = u.name;
+
+  const a = {line:anchor.line, ch:anchor.ch}, h = {line:head.line, ch:head.ch};
+  cm.operation(() => {                             // one batched relayout, not several
+    if (r) r.marks.forEach(m => { try { m.clear(); } catch(e){} });
+    const marks = [];
+    try {
+      if (posCmp(a, h) !== 0) {                     // a real selection -> tint the covered text
+        const lo = posCmp(a, h) < 0 ? a : h, hi = posCmp(a, h) < 0 ? h : a;
+        marks.push(cm.markText(lo, hi, { css: "background-color:" + hexA(u.color, 0.30) }));
+      }
+      marks.push(cm.setBookmark(h, { widget: caret, insertLeft: true }));
+      remoteCursors[from] = { marks, cellId, caretEl: caret, key };
+    } catch(e) { marks.forEach(m => { try { m.clear(); } catch(_){} }); }  // stale positions
+  });
+}
 function flash(t){ const s=$("status"); s.textContent=t; setTimeout(()=>s.textContent="● live",1200); }
 
+applyVim();                      // sync the toggle button label to the saved preference
 if (params.get("name")) join();
 </script>
 </body>

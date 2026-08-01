@@ -446,6 +446,11 @@ async def ws(websocket: WebSocket, slug: str):
             elif t == "presence":
                 session.clients[cid]["cell"] = msg.get("cell")
                 await session.broadcast({"type": "presence", "users": session.presence()})
+            elif t == "cursor":
+                # ephemeral: relay a client's in-editor caret/selection to everyone else
+                await session.broadcast({"type": "cursor", "cellId": msg.get("cellId"),
+                                         "from": cid, "anchor": msg.get("anchor"),
+                                         "head": msg.get("head")}, exclude=cid)
             elif t == "add":
                 new = {"id": uuid.uuid4().hex[:8],
                        "cell_type": msg.get("cellType", "code"),
